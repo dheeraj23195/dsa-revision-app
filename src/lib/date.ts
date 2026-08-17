@@ -19,7 +19,7 @@ export function formatISO(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-function daysBetween(fromISO: string, toISO: string): number {
+export function daysBetween(fromISO: string, toISO: string): number {
   const from = new Date(`${fromISO}T00:00:00`);
   const to = new Date(`${toISO}T00:00:00`);
   return Math.round((to.getTime() - from.getTime()) / 86_400_000);
