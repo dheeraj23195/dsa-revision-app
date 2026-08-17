@@ -3,10 +3,11 @@
 // screens should not import `Dexie` directly.
 
 import Dexie, { type EntityTable } from 'dexie';
-import type { DayPlan, Question, ReviewLog, Settings } from './types';
+import type { DayPlan, Question, Rating, ReviewKind, ReviewLog, Settings } from './types';
 import { seedQuestions } from './data/seed';
 import { addDaysISO, todayISO } from './lib/date';
-import { planDay } from './lib/scheduler';
+import { pickOneMore, planDay } from './lib/scheduler';
+import { applyRating } from './lib/srs';
 
 export const DEFAULT_SETTINGS: Omit<Settings, 'id'> = {
   dailyMix: 'auto',
@@ -146,4 +147,56 @@ export async function getOrCreateDayPlan(date: string): Promise<DayPlan> {
   const plan = planDay(questions, reviewLogs, settings, date);
   await db.dayPlans.put(plan);
   return plan;
+}
+
+// §4 + §6.1: rating a Today card. Updates the question's SRS state via the
+// pure ladder (lib/srs.ts) and logs the review. `kind` is derived, not
+// passed in by the caller, since it depends on plan membership the caller
+// shouldn't need to know about:
+//   - 'one-more' if this id was appended to today's plan via the One More
+//     button (checked first — an extra can be a question's first-ever
+//     review too, and One More's provenance takes priority over that).
+//   - 'first-solve' if this is the question's first review ever (reps was
+//     still 0 going into this rating).
+//   - 'review' otherwise.
+export async function submitRating(questionId: string, rating: Rating, date: string): Promise<void> {
+  await db.transaction('rw', db.questions, db.reviewLogs, db.dayPlans, async () => {
+    const q = await db.questions.get(questionId);
+    if (!q || !q.done || !q.srs) return; // not an eligible Done-with-SRS question — nothing to rate
+
+    const plan = await db.dayPlans.get(date);
+    const kind: ReviewKind = plan?.extraIds.includes(questionId)
+      ? 'one-more'
+      : q.srs.reps === 0
+        ? 'first-solve'
+        : 'review';
+
+    const { srs, status } = applyRating(q.srs, rating, date);
+    await db.questions.update(questionId, { srs, status });
+    await db.reviewLogs.add({ id: newReviewLogId(), questionId, date, rating, kind });
+  });
+}
+
+// §5's "One More" button. Picks one question via the same priority chain
+// (overdue -> due -> coverage), difficulty preference Medium -> Hard -> Easy,
+// excluding everything already in today's plan (originals AND earlier
+// extras, rated or not) so nothing is ever served twice in one day. Appends
+// to dayPlans.extraIds so it survives a refresh. Returns the picked id, or
+// null if literally nothing eligible remains.
+export async function addOneMore(date: string): Promise<string | null> {
+  return db.transaction('rw', db.questions, db.reviewLogs, db.dayPlans, async () => {
+    const plan = await db.dayPlans.get(date);
+    if (!plan) return null;
+
+    const [questions, reviewLogs] = await Promise.all([db.questions.toArray(), db.reviewLogs.toArray()]);
+    const excludeIds = new Set([...plan.questionIds, ...plan.extraIds]);
+    const pick = pickOneMore(questions, reviewLogs, excludeIds, date);
+    if (!pick) return null;
+
+    await db.dayPlans.update(date, {
+      extraIds: [...plan.extraIds, pick.questionId],
+      reasons: { ...plan.reasons, [pick.questionId]: pick.reason },
+    });
+    return pick.questionId;
+  });
 }

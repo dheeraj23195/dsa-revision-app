@@ -117,6 +117,41 @@ function byDoneAtAsc(a: Question, b: Question): number {
   return (a.doneAt ?? '').localeCompare(b.doneAt ?? '');
 }
 
+// §4: "Mastered questions leave the regular rotation but remain eligible for
+// 'One More' and for hard-interleave picks." So overdue / due-today / the
+// default coverage ranking must all exclude mastered questions — but the
+// interleave-override branch (a deliberate duplicate pick) and pickOneMore
+// below are explicitly exempted and may still draw from them.
+//
+// `basePool` is every done/srs/difficulty-matching, not-yet-used candidate;
+// `allowMastered` controls whether mastered questions are visible to the
+// overdue/due-today/coverage checks run here, or excluded from all of them.
+function pickFromPool(
+  basePool: Question[],
+  counts: Map<string, number>,
+  date: string,
+  allowMastered: boolean,
+): PlannedPick | null {
+  const pool = allowMastered ? basePool : basePool.filter((q) => q.status !== 'mastered');
+  if (pool.length === 0) return null;
+
+  // 1. Overdue reviews, oldest due date first.
+  const overdue = pool
+    .filter((q) => q.srs!.dueDate < date)
+    .sort((a, b) => a.srs!.dueDate.localeCompare(b.srs!.dueDate) || byDoneAtAsc(a, b));
+  if (overdue.length > 0) return { questionId: overdue[0].id, reason: 'overdue' };
+
+  // 2. Due today.
+  const dueToday = pool.filter((q) => q.srs!.dueDate === date).sort(byDoneAtAsc);
+  if (dueToday.length > 0) return { questionId: dueToday[0].id, reason: 'due-today' };
+
+  // 3. Coverage pick — fewest total reviews among the pool's own patterns.
+  const ranked = pool
+    .slice()
+    .sort((a, b) => leastCoveredScore(a, counts) - leastCoveredScore(b, counts) || byDoneAtAsc(a, b));
+  return { questionId: ranked[0].id, reason: 'coverage' };
+}
+
 function pickForSlot(
   slot: Slot,
   questions: Question[],
@@ -125,26 +160,18 @@ function pickForSlot(
   usedIds: Set<string>,
 ): PlannedPick | null {
   for (const difficulty of DIFFICULTY_RELAX_CHAIN[slot.difficulty]) {
-    const pool = questions.filter(
+    const basePool = questions.filter(
       (q) => q.done && q.srs !== null && q.difficulty === difficulty && !usedIds.has(q.id),
     );
-    if (pool.length === 0) continue;
+    if (basePool.length === 0) continue;
 
-    // 1. Overdue reviews, oldest due date first.
-    const overdue = pool
-      .filter((q) => q.srs!.dueDate < date)
-      .sort((a, b) => a.srs!.dueDate.localeCompare(b.srs!.dueDate) || byDoneAtAsc(a, b));
-    if (overdue.length > 0) return { questionId: overdue[0].id, reason: 'overdue' };
-
-    // 2. Due today.
-    const dueToday = pool.filter((q) => q.srs!.dueDate === date).sort(byDoneAtAsc);
-    if (dueToday.length > 0) return { questionId: dueToday[0].id, reason: 'due-today' };
-
-    // 3. Coverage pick — on an interleave day, the Hard slot's version of
-    // this step is inverted per §5 Step 3: pick the *most*-covered pattern
-    // (a deliberate duplicate) instead of the least-covered one.
+    // Step 3's inversion for an interleave day's Hard slot: pick the
+    // *most*-covered pattern (a deliberate duplicate) instead of the least
+    // covered one — and, per §4, this branch alone may draw on mastered
+    // questions, since duplicating an already-mastered Hard pattern is
+    // exactly the "stress-test familiar patterns" case §1 describes.
     if (slot.interleaveEligible && difficulty === 'Hard') {
-      const alreadyCovered = pool.filter((q) => mostCoveredScore(q, counts) > 0);
+      const alreadyCovered = basePool.filter((q) => mostCoveredScore(q, counts) > 0);
       if (alreadyCovered.length > 0) {
         const ranked = alreadyCovered
           .slice()
@@ -153,13 +180,38 @@ function pickForSlot(
       }
       // Nothing has ever been reviewed yet (e.g. very first days) — there is
       // no "already-covered" pattern to duplicate, so fall through to a
-      // normal coverage pick rather than picking arbitrarily.
+      // normal (non-mastered) pick rather than picking arbitrarily.
     }
 
-    const ranked = pool
-      .slice()
-      .sort((a, b) => leastCoveredScore(a, counts) - leastCoveredScore(b, counts) || byDoneAtAsc(a, b));
-    return { questionId: ranked[0].id, reason: 'coverage' };
+    const pick = pickFromPool(basePool, counts, date, false);
+    if (pick) return pick;
+    // pickFromPool returned null: basePool had candidates, but all of them
+    // were mastered — relax to the next difficulty rather than serving a
+    // mastered question through the regular rotation.
+  }
+  return null;
+}
+
+/** §5's "One More" button: same priority chain (overdue -> due -> coverage),
+ * difficulty preference Medium -> Hard -> Easy, no hard-interleave concept.
+ * Per §4, mastered questions ARE eligible here (unlike the regular slots
+ * above) — "remain eligible for One More" is explicit. `excludeIds` must
+ * include both the day's original questionIds AND any extraIds already
+ * appended by earlier "One More" presses, so a still-unrated extra pick
+ * can never be served a second time before it's rated. */
+export function pickOneMore(
+  questions: Question[],
+  reviewLogs: ReviewLog[],
+  excludeIds: Set<string>,
+  date: string,
+): PlannedPick | null {
+  const counts = patternReviewCounts(questions, reviewLogs);
+  for (const difficulty of ['Medium', 'Hard', 'Easy'] as const) {
+    const basePool = questions.filter(
+      (q) => q.done && q.srs !== null && q.difficulty === difficulty && !excludeIds.has(q.id),
+    );
+    const pick = pickFromPool(basePool, counts, date, true);
+    if (pick) return pick;
   }
   return null;
 }

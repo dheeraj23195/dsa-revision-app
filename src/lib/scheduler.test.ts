@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { Question, ReviewLog, Settings } from '../types';
-import { planDayDetailed } from './scheduler';
+import { pickOneMore, planDayDetailed } from './scheduler';
 
 function q(overrides: Partial<Question> & Pick<Question, 'id' | 'difficulty' | 'patterns'>): Question {
   return {
@@ -243,5 +243,78 @@ describe('Fixture F — within-day breadth: a pattern picked earlier today count
   it('slot 3: qB is the only question left, so it fills the last slot', () => {
     const result = planDayDetailed(questions, [], settings(), date);
     expect(result.picks[2]).toEqual({ questionId: 'qB-recursion-older', reason: 'coverage' });
+  });
+});
+
+describe('Fixture G — "One More" never re-serves a question already in today\'s plan', () => {
+  const date = '2026-03-01';
+
+  // qX is heavily overdue (Feb 1) and would clearly win an ordinary priority
+  // chain over qY (overdue by only 3 days) — but qX is already in today's
+  // plan (both as an original pick and, separately below, as an
+  // already-appended "One More" extra), so pickOneMore must skip it.
+  const questions: Question[] = [
+    q({ id: 'qX-already-planned', difficulty: 'Medium', patterns: ['Greedy'], doneAt: '2026-01-01', srs: { ladderIndex: 1, dueDate: '2026-02-01', lapses: 0, reps: 1 } }),
+    q({ id: 'qY-not-yet-planned', difficulty: 'Medium', patterns: ['Trie'], doneAt: '2026-01-05', srs: { ladderIndex: 1, dueDate: '2026-02-26', lapses: 0, reps: 1 } }),
+  ];
+
+  it('qX excluded as an original plan member -> qY is picked instead, even though qX is more overdue', () => {
+    const excludeIds = new Set(['qX-already-planned']); // e.g. dayPlan.questionIds
+    const pick = pickOneMore(questions, [], excludeIds, date);
+    expect(pick).toEqual({ questionId: 'qY-not-yet-planned', reason: 'overdue' });
+  });
+
+  it('qX excluded as an already-appended (unrated) One More extra -> same result', () => {
+    const excludeIds = new Set(['qX-already-planned']); // e.g. dayPlan.extraIds from an earlier press
+    const pick = pickOneMore(questions, [], excludeIds, date);
+    expect(pick).toEqual({ questionId: 'qY-not-yet-planned', reason: 'overdue' });
+  });
+
+  it('with nothing excluded, qX (more overdue) would normally win -- confirms the exclusion is what changes the outcome', () => {
+    const pick = pickOneMore(questions, [], new Set(), date);
+    expect(pick).toEqual({ questionId: 'qX-already-planned', reason: 'overdue' });
+  });
+});
+
+describe('Fixture H — mastered questions leave the regular rotation but stay eligible for One More and hard-interleave', () => {
+  const date = '2026-04-01';
+
+  // A mastered, overdue Medium question sits alongside a non-mastered,
+  // not-yet-due Medium question. The regular scheduler must skip the
+  // mastered one entirely (even though it's overdue!) and fall back to a
+  // coverage pick on the non-mastered one; pickOneMore must still be able
+  // to reach the mastered one when nothing else is available.
+  const questions: Question[] = [
+    q({ id: 'm-mastered-overdue', difficulty: 'Medium', patterns: ['Trees'], doneAt: '2026-01-01', status: 'mastered', srs: { ladderIndex: 4, dueDate: '2026-03-01', lapses: 0, reps: 6 } }),
+    q({ id: 'm-active-not-due', difficulty: 'Medium', patterns: ['Graphs'], doneAt: '2026-01-02', status: 'reviewing', srs: { ladderIndex: 2, dueDate: '2026-05-01', lapses: 0, reps: 2 } }),
+  ];
+
+  it('regular Today plan: skips the overdue-but-mastered question, coverage-picks the non-mastered one instead', () => {
+    const result = planDayDetailed(questions, [], settings(), date);
+    expect(result.picks).toHaveLength(1);
+    expect(result.picks[0]).toEqual({ questionId: 'm-active-not-due', reason: 'coverage' });
+  });
+
+  it('pickOneMore CAN still reach the mastered question once the non-mastered one is excluded', () => {
+    const excludeIds = new Set(['m-active-not-due']); // e.g. already used by the regular plan
+    const pick = pickOneMore(questions, [], excludeIds, date);
+    expect(pick).toEqual({ questionId: 'm-mastered-overdue', reason: 'overdue' });
+  });
+
+  it('hard-interleave override CAN still reach a mastered Hard question when duplicating a covered pattern', () => {
+    const hardMastered = q({
+      id: 'h-mastered-covered',
+      difficulty: 'Hard',
+      patterns: ['Kadane'],
+      status: 'mastered',
+      doneAt: '2026-01-01',
+      srs: { ladderIndex: 4, dueDate: '2026-03-01', lapses: 0, reps: 6 },
+    });
+    const reviewLogs: ReviewLog[] = [log('h-mastered-covered', '2026-02-01')]; // Kadane has 1 prior review -> "already covered"
+    // hardInterleaveEvery: 1 forces every hardDay to be an interleave day,
+    // isolating the override's mastered-eligibility from date arithmetic.
+    const result = planDayDetailed([hardMastered], reviewLogs, settings({ dailyMix: 'hardDay', hardInterleaveEvery: 1 }), date);
+    expect(result.interleaveDay).toBe(true);
+    expect(result.picks[0]).toEqual({ questionId: 'h-mastered-covered', reason: 'hard-interleave' });
   });
 });
