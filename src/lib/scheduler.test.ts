@@ -148,4 +148,69 @@ describe('Fixture C — hard-interleave (§5 Step 3) actually firing on the righ
     expect(result.mix).toBe('hardDay');
     expect(result.picks[0]).toEqual({ questionId: 'h1-kadane-covered', reason: 'hard-interleave' });
   });
+
+  it('design decision #3: interleave day with ZERO Hard candidates does not force hardDay', () => {
+    // Same interleave date (2026-01-10) as above, but no Hard questions
+    // exist at all. If the interleave trigger fired off the date alone, the
+    // Hard slot would immediately relax to Medium and this day would only
+    // get 2 total picks instead of mediumDay's 3 — for no interleave
+    // benefit, since there's no Hard question to duplicate. It should stay
+    // a mediumDay instead.
+    const noHardQuestions = questions.filter((x) => x.difficulty !== 'Hard');
+    const result = planDayDetailed(noHardQuestions, reviewLogs, settings({ dailyMix: 'auto' }), '2026-01-10');
+    expect(result.interleaveDay).toBe(true); // the date itself is still an interleave day...
+    expect(result.mix).toBe('mediumDay'); // ...but there's nothing for it to trigger
+    // Only one Medium question exists in this fixture at all, so only one
+    // slot can be filled — the point here is `mix`, not the pick count.
+    expect(result.picks).toHaveLength(1);
+    expect(result.picks[0]).toEqual({ questionId: 'm1-filler', reason: 'coverage' });
+  });
+});
+
+describe('Fixture D — two overdue candidates in the same slot: older due date wins', () => {
+  const date = '2026-01-15';
+
+  const questions: Question[] = [
+    q({ id: 'm-old-overdue', difficulty: 'Medium', patterns: ['DP'], doneAt: '2025-12-01', srs: { ladderIndex: 1, dueDate: '2026-01-05', lapses: 0, reps: 1 } }), // overdue 10d
+    q({ id: 'm-new-overdue', difficulty: 'Medium', patterns: ['Greedy'], doneAt: '2025-12-10', srs: { ladderIndex: 1, dueDate: '2026-01-08', lapses: 0, reps: 1 } }), // overdue 7d
+    q({ id: 'm-due-today', difficulty: 'Medium', patterns: ['Trie'], doneAt: '2026-01-01', srs: { ladderIndex: 0, dueDate: '2026-01-15', lapses: 0, reps: 0 } }), // due today, not overdue
+  ];
+
+  it('slot 1: the OLDER due date (Jan 5) wins over the less-overdue candidate (Jan 8), not just "any overdue"', () => {
+    const result = planDayDetailed(questions, [], settings(), date);
+    expect(result.picks[0]).toEqual({ questionId: 'm-old-overdue', reason: 'overdue' });
+  });
+
+  it('slot 2: with the oldest overdue question used, the remaining overdue candidate (Jan 8) wins over due-today', () => {
+    const result = planDayDetailed(questions, [], settings(), date);
+    expect(result.picks[1]).toEqual({ questionId: 'm-new-overdue', reason: 'overdue' });
+  });
+
+  it('slot 3: no overdue candidates remain, so the due-today question fills the last slot', () => {
+    const result = planDayDetailed(questions, [], settings(), date);
+    expect(result.picks[2]).toEqual({ questionId: 'm-due-today', reason: 'due-today' });
+  });
+});
+
+describe('Fixture E — coverage-pick tie on review count: older doneAt wins', () => {
+  const date = '2026-01-20';
+
+  const questions: Question[] = [
+    q({ id: 'mc1-stacks-older', difficulty: 'Medium', patterns: ['Stacks'], doneAt: '2026-01-05', srs: { ladderIndex: 0, dueDate: '2026-02-01', lapses: 0, reps: 0 } }),
+    q({ id: 'mc2-queues-newer', difficulty: 'Medium', patterns: ['Queues'], doneAt: '2026-01-10', srs: { ladderIndex: 0, dueDate: '2026-02-01', lapses: 0, reps: 0 } }),
+  ];
+  // No reviewLogs at all -> both patterns are tied at 0 reviews. Neither
+  // question is due/overdue, so both slots resolve via coverage pick, and
+  // the tie must break on doneAt (§5 Step 2.3: "Ties -> older doneAt first").
+
+  it('slot 1: tied at 0 reviews each -> mc1 wins because it was doneAt earlier (Jan 5 vs Jan 10)', () => {
+    const result = planDayDetailed(questions, [], settings(), date);
+    expect(result.picks[0]).toEqual({ questionId: 'mc1-stacks-older', reason: 'coverage' });
+  });
+
+  it('slot 2: only mc2 remains, so it fills the slot; no 3rd pick since nothing else is Done', () => {
+    const result = planDayDetailed(questions, [], settings(), date);
+    expect(result.picks[1]).toEqual({ questionId: 'mc2-queues-newer', reason: 'coverage' });
+    expect(result.picks).toHaveLength(2);
+  });
 });

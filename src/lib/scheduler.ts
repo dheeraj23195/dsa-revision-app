@@ -67,8 +67,20 @@ function decideMix(questions: Question[], settings: Settings, date: string, inte
     (q) => q.done && q.difficulty === 'Hard' && q.srs !== null && q.srs.dueDate <= date,
   );
   if (hasDueOrOverdueHard) return 'hardDay';
-  if (interleaveDay) return 'hardDay';
+  // Design decision #3: the interleave rule only "triggers" (§5 Step 1's
+  // second OR-clause) if there is actually a Done Hard question for the
+  // Hard slot to serve. Forcing hardDay off the date alone, with zero Hard
+  // candidates, wouldn't produce a real interleave pick — the Hard slot's
+  // difficulty-relax chain would immediately fall through to Medium, and
+  // the day would end up with 2 total picks instead of mediumDay's 3, for
+  // no benefit. This is checked explicitly here rather than left as an
+  // emergent side effect of the relax chain silently absorbing the miss.
+  if (interleaveDay && hasHardCandidate(questions)) return 'hardDay';
   return 'mediumDay';
+}
+
+function hasHardCandidate(questions: Question[]): boolean {
+  return questions.some((q) => q.done && q.srs !== null && q.difficulty === 'Hard');
 }
 
 /** Total logged reviews per pattern so far (§5 Step 2.3's "fewest total
