@@ -214,3 +214,34 @@ describe('Fixture E — coverage-pick tie on review count: older doneAt wins', (
     expect(result.picks).toHaveLength(2);
   });
 });
+
+describe('Fixture F — within-day breadth: a pattern picked earlier today counts against itself later today', () => {
+  // Two Recursion questions and one Bit Manipulation question, all tied at 0
+  // logged reviews, none due/overdue. qB's doneAt (Jan 5) is older than
+  // qC's (Jan 10) — if slot ranking only consulted reviewLogs + the doneAt
+  // tie-break, qB would beat qC for slot 2 (same tie-break as Fixture E).
+  // But qB shares a pattern with the question slot 1 already picked, so a
+  // real breadth-first day should prefer qC's untouched pattern instead.
+  const date = '2026-02-01';
+
+  const questions: Question[] = [
+    q({ id: 'qA-recursion-oldest', difficulty: 'Medium', patterns: ['Recursion'], doneAt: '2026-01-01', srs: { ladderIndex: 0, dueDate: '2026-03-01', lapses: 0, reps: 0 } }),
+    q({ id: 'qB-recursion-older', difficulty: 'Medium', patterns: ['Recursion'], doneAt: '2026-01-05', srs: { ladderIndex: 0, dueDate: '2026-03-01', lapses: 0, reps: 0 } }),
+    q({ id: 'qC-bitmanip-newer', difficulty: 'Medium', patterns: ['Bit Manipulation'], doneAt: '2026-01-10', srs: { ladderIndex: 0, dueDate: '2026-03-01', lapses: 0, reps: 0 } }),
+  ];
+
+  it('slot 1: all tied at 0 reviews -> oldest doneAt (qA) wins, as usual', () => {
+    const result = planDayDetailed(questions, [], settings(), date);
+    expect(result.picks[0]).toEqual({ questionId: 'qA-recursion-oldest', reason: 'coverage' });
+  });
+
+  it('slot 2: qC (untouched Bit Manipulation) beats qB (Recursion, already used this plan) despite qB\'s older doneAt', () => {
+    const result = planDayDetailed(questions, [], settings(), date);
+    expect(result.picks[1]).toEqual({ questionId: 'qC-bitmanip-newer', reason: 'coverage' });
+  });
+
+  it('slot 3: qB is the only question left, so it fills the last slot', () => {
+    const result = planDayDetailed(questions, [], settings(), date);
+    expect(result.picks[2]).toEqual({ questionId: 'qB-recursion-older', reason: 'coverage' });
+  });
+});

@@ -48,8 +48,18 @@ export interface Settings {
   hardInterleaveEvery: number; // default 3
 }
 
+// Which step of the §5 priority chain produced a pick — the Today screen's
+// "why" label (§6.1: "Overdue · Due · New pattern · Hard interleave") reads
+// directly off this.
+export type PickReason = 'overdue' | 'due-today' | 'coverage' | 'hard-interleave';
+
 export interface DayPlan {
   date: string; // ISO date, primary key
   questionIds: string[]; // the originally planned set for the day
   extraIds: string[]; // appended one at a time by "One More"
+  // Not in the original §3 sketch — added so the Today screen's "why" label
+  // survives a page refresh. Without it, a reloaded plan can't tell a
+  // hard-interleave pick apart from an ordinary coverage pick: by the time
+  // it's cached, both just look like "a Done question that isn't due yet."
+  reasons: Record<string, PickReason>;
 }

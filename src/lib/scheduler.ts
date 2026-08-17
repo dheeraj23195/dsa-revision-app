@@ -6,12 +6,10 @@
 // Only `done: true` questions are ever candidates (§5: "Only questions with
 // done: true are ever scheduled for review").
 
-import type { DayPlan, Difficulty, Question, ReviewLog, Settings } from '../types';
+import type { DayPlan, Difficulty, PickReason, Question, ReviewLog, Settings } from '../types';
 import { daysBetween } from './date';
 
 export type Mix = 'hardDay' | 'mediumDay';
-
-export type PickReason = 'overdue' | 'due-today' | 'coverage' | 'hard-interleave';
 
 export interface PlannedPick {
   questionId: string;
@@ -87,7 +85,7 @@ function hasHardCandidate(questions: Question[]): boolean {
  * reviews" and Step 3's mirror-image "most-reviewed / already-covered").
  * A question tagged with multiple patterns contributes each of its reviews
  * to every one of its patterns' counts. */
-function patternReviewCounts(questions: Question[], reviewLogs: ReviewLog[]): Map<string, number> {
+export function patternReviewCounts(questions: Question[], reviewLogs: ReviewLog[]): Map<string, number> {
   const patternsById = new Map<string, string[]>();
   for (const q of questions) patternsById.set(q.id, q.patterns);
   const counts = new Map<string, number>();
@@ -194,6 +192,7 @@ export function planDayDetailed(
   const interleaveDay = isHardInterleaveDay(date, settings.hardInterleaveEvery);
   const mix = decideMix(questions, settings, date, interleaveDay);
   const counts = patternReviewCounts(questions, reviewLogs);
+  const questionsById = new Map(questions.map((q) => [q.id, q]));
   const usedIds = new Set<string>();
   const picks: PlannedPick[] = [];
 
@@ -202,6 +201,16 @@ export function planDayDetailed(
     if (pick) {
       picks.push(pick);
       usedIds.add(pick.questionId);
+      // Bump the picked question's own patterns as if already reviewed,
+      // before ranking the next slot. Otherwise, with reviewLogs alone
+      // (all 0 for a pattern nobody has reviewed yet), two slots in the
+      // SAME day's plan can both land on that pattern via coverage pick
+      // while a different, equally-uncovered pattern sits untouched —
+      // directly undercutting §5's "cover as many distinct patterns as
+      // possible" breadth goal within a single day, not just across days.
+      for (const p of questionsById.get(pick.questionId)?.patterns ?? []) {
+        counts.set(p, (counts.get(p) ?? 0) + 1);
+      }
     }
     // If pick is null, every difficulty in the relax chain was exhausted
     // (no Done questions at all for Hard/Medium/Easy) — leave the slot
@@ -218,9 +227,12 @@ export function planDay(
   date: string,
 ): DayPlan {
   const detail = planDayDetailed(questions, reviewLogs, settings, date);
+  const reasons: Record<string, PickReason> = {};
+  for (const p of detail.picks) reasons[p.questionId] = p.reason;
   return {
     date,
     questionIds: detail.picks.map((p) => p.questionId),
     extraIds: [],
+    reasons,
   };
 }

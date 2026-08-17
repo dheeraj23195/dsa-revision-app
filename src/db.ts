@@ -6,6 +6,7 @@ import Dexie, { type EntityTable } from 'dexie';
 import type { DayPlan, Question, ReviewLog, Settings } from './types';
 import { seedQuestions } from './data/seed';
 import { addDaysISO, todayISO } from './lib/date';
+import { planDay } from './lib/scheduler';
 
 export const DEFAULT_SETTINGS: Omit<Settings, 'id'> = {
   dailyMix: 'auto',
@@ -115,4 +116,34 @@ export async function unmarkQuestionsDone(ids: string[]): Promise<void> {
       srs: null,
       status: 'todo',
     });
+}
+
+// §6.1: "the plan persisting via dayPlans... so refreshing the page doesn't
+// reshuffle it." Reads the cached plan for `date` if one exists; otherwise
+// runs the pure scheduler (§5) once and persists the result. Safe to call
+// more than once for the same date (e.g. React StrictMode's double-invoked
+// effects) — planDay is a pure function of its inputs, so a redundant
+// second computation just overwrites the cache with an identical row.
+//
+// Exception: a cached plan with zero picks is not treated as locked in.
+// Today defaults to the first tab a user sees, so it can run (and cache) a
+// plan before anything has ever been marked Done — e.g. right after first
+// install, or straight after a bulk-import, before the one-time shift-click
+// pass in the Bank. There is nothing in an empty plan to protect from
+// reshuffling, so it's safe — and necessary — to recompute until it
+// actually has something to show.
+export async function getOrCreateDayPlan(date: string): Promise<DayPlan> {
+  const existing = await db.dayPlans.get(date);
+  if (existing && (existing.questionIds.length > 0 || existing.extraIds.length > 0)) {
+    return existing;
+  }
+
+  const [questions, reviewLogs, settings] = await Promise.all([
+    db.questions.toArray(),
+    db.reviewLogs.toArray(),
+    getSettings(),
+  ]);
+  const plan = planDay(questions, reviewLogs, settings, date);
+  await db.dayPlans.put(plan);
+  return plan;
 }
