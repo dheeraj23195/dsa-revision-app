@@ -5,6 +5,17 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>dsa-scaffold</title>
+    <script>
+      // Applied synchronously, before first paint, so there's no light-mode
+      // flash before React mounts and src/lib/theme.ts takes over. Kept in
+      // sync with that file's storage key and fallback logic by hand, since
+      // this has to run before any module import is possible.
+      (function () {
+        var stored = localStorage.getItem('dsa-revision-theme');
+        var dark = stored ? stored === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+        if (dark) document.documentElement.classList.add('dark');
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

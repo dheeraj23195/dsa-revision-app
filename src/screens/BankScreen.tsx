@@ -105,7 +105,7 @@ export function BankScreen() {
   }, [grouped, collapsedSteps]);
 
   if (!questions) {
-    return <div className="p-8 text-slate-500">Loading…</div>;
+    return <div className="p-8 text-slate-500 dark:text-slate-400">Loading…</div>;
   }
 
   const totalDone = questions.filter((q) => q.done).length;
@@ -152,10 +152,10 @@ export function BankScreen() {
   return (
     <div className="mx-auto max-w-4xl p-6">
       <header className="mb-4">
-        <h1 className="text-2xl font-bold text-slate-800">Question Bank</h1>
-        <p className="mt-1 text-sm text-slate-500">
+        <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100">Question Bank</h1>
+        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
           {totalDone} / {questions.length} done overall
-          <span className="text-slate-400"> · shift-click a checkbox to check/uncheck a range</span>
+          <span className="text-slate-400 dark:text-slate-500"> · shift-click a checkbox to check/uncheck a range</span>
         </p>
       </header>
 
@@ -184,14 +184,14 @@ export function BankScreen() {
 
       <div className="mb-3 flex justify-end gap-2 text-xs">
         <button
-          className="text-slate-500 hover:text-slate-800 hover:underline"
+          className="text-slate-500 hover:text-slate-800 hover:underline dark:text-slate-400 dark:hover:text-slate-100"
           onClick={() => setCollapsedSteps(new Set(stepMeta.map(([step]) => step)))}
         >
           Collapse all
         </button>
-        <span className="text-slate-300">·</span>
+        <span className="text-slate-300 dark:text-slate-600">·</span>
         <button
-          className="text-slate-500 hover:text-slate-800 hover:underline"
+          className="text-slate-500 hover:text-slate-800 hover:underline dark:text-slate-400 dark:hover:text-slate-100"
           onClick={() => setCollapsedSteps(new Set())}
         >
           Expand all
@@ -199,7 +199,7 @@ export function BankScreen() {
       </div>
 
       {grouped.length === 0 && (
-        <p className="rounded-lg bg-slate-50 p-6 text-center text-sm text-slate-500">
+        <p className="rounded-lg bg-slate-50 p-6 text-center text-sm text-slate-500 dark:bg-slate-800/50 dark:text-slate-400">
           No questions match the current filters.
         </p>
       )}
@@ -251,24 +251,24 @@ function StepSection({
 }) {
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;
   return (
-    <section className="rounded-lg border border-slate-200">
+    <section className="rounded-lg border border-slate-200 dark:border-slate-700">
       <button
         onClick={onToggleCollapsed}
-        className="flex w-full items-center gap-4 rounded-lg px-4 py-3 text-left hover:bg-slate-50"
+        className="flex w-full items-center gap-4 rounded-lg px-4 py-3 text-left hover:bg-slate-50 dark:hover:bg-slate-800"
       >
-        <span className="w-4 text-slate-400">{collapsed ? '▸' : '▾'}</span>
-        <span className="flex-1 font-semibold text-slate-800">{stepTitle}</span>
+        <span className="w-4 text-slate-400 dark:text-slate-500">{collapsed ? '▸' : '▾'}</span>
+        <span className="flex-1 font-semibold text-slate-800 dark:text-slate-100">{stepTitle}</span>
         {shownCount !== total && (
-          <span className="text-xs text-slate-400">{shownCount} shown</span>
+          <span className="text-xs text-slate-400 dark:text-slate-500">{shownCount} shown</span>
         )}
-        <span className="text-xs text-slate-500">
+        <span className="text-xs text-slate-500 dark:text-slate-400">
           {done}/{total} done
         </span>
-        <div className="h-2 w-32 overflow-hidden rounded-full bg-slate-100">
-          <div className="h-full bg-emerald-500" style={{ width: `${pct}%` }} />
+        <div className="h-2 w-32 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
+          <div className="h-full bg-emerald-500 dark:bg-emerald-400" style={{ width: `${pct}%` }} />
         </div>
       </button>
-      {!collapsed && <div className="border-t border-slate-100">{children}</div>}
+      {!collapsed && <div className="border-t border-slate-100 dark:border-slate-800">{children}</div>}
     </section>
   );
 }
@@ -302,7 +302,7 @@ function LectureGroups({
       {groups.map(([lecture, qs]) => (
         <div key={lecture || '__none__'}>
           {lecture && (
-            <div className="bg-slate-50 px-4 py-1.5 text-xs font-medium text-slate-500">
+            <div className="bg-slate-50 px-4 py-1.5 text-xs font-medium text-slate-500 dark:bg-slate-800/50 dark:text-slate-400">
               {lecture}
             </div>
           )}
@@ -323,7 +323,7 @@ function QuestionRow({
   onToggle: (q: Question, shiftKey: boolean) => void;
 }) {
   return (
-    <div className="flex items-center gap-3 border-t border-slate-50 px-4 py-2 first:border-t-0">
+    <div className="flex items-center gap-3 border-t border-slate-50 px-4 py-2 first:border-t-0 dark:border-slate-800">
       <input
         type="checkbox"
         checked={q.done}
@@ -342,18 +342,18 @@ function QuestionRow({
             href={q.url}
             target="_blank"
             rel="noreferrer"
-            className="text-sm text-slate-800 hover:text-indigo-600 hover:underline"
+            className="text-sm text-slate-800 hover:text-indigo-600 hover:underline dark:text-slate-100 dark:hover:text-indigo-400"
           >
             {q.title}
           </a>
         ) : (
-          <span className="text-sm text-slate-800">{q.title}</span>
+          <span className="text-sm text-slate-800 dark:text-slate-100">{q.title}</span>
         )}
       </div>
       <PatternTags patterns={q.patterns} />
       <DifficultyBadge difficulty={q.difficulty} />
       <StatusChip status={q.status} />
-      <span className="w-24 shrink-0 text-right text-xs text-slate-400">
+      <span className="w-24 shrink-0 text-right text-xs text-slate-400 dark:text-slate-500">
         {q.srs ? dueLabel(q.srs.dueDate) : ''}
       </span>
     </div>
@@ -392,19 +392,19 @@ function FilterBar({
   anyFilterActive: boolean;
 }) {
   return (
-    <div className="mb-4 space-y-3 rounded-lg border border-slate-200 bg-white p-4">
+    <div className="mb-4 space-y-3 rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
       <div className="flex items-center gap-3">
         <input
           type="text"
           placeholder="Search by title…"
           value={search}
           onChange={(e) => onSearch(e.target.value)}
-          className="w-full max-w-xs rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:border-indigo-400 focus:outline-none"
+          className="w-full max-w-xs rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:border-indigo-400 focus:outline-none dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:placeholder:text-slate-500"
         />
         {anyFilterActive && (
           <button
             onClick={onClearAll}
-            className="text-xs text-slate-500 hover:text-slate-800 hover:underline"
+            className="text-xs text-slate-500 hover:text-slate-800 hover:underline dark:text-slate-400 dark:hover:text-slate-100"
           >
             Clear filters
           </button>
@@ -449,7 +449,7 @@ function FilterBar({
 function FilterChipRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex gap-2">
-      <span className="w-16 shrink-0 pt-1 text-xs font-medium text-slate-400">{label}</span>
+      <span className="w-16 shrink-0 pt-1 text-xs font-medium text-slate-400 dark:text-slate-500">{label}</span>
       <div className="flex max-h-24 flex-wrap gap-1.5 overflow-y-auto">{children}</div>
     </div>
   );
@@ -469,8 +469,8 @@ function Chip({
       onClick={onClick}
       className={`rounded-full border px-2.5 py-0.5 text-xs transition-colors ${
         active
-          ? 'border-indigo-400 bg-indigo-50 text-indigo-700'
-          : 'border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50'
+          ? 'border-indigo-400 bg-indigo-50 text-indigo-700 dark:border-indigo-500 dark:bg-indigo-900/30 dark:text-indigo-300'
+          : 'border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:border-slate-600 dark:hover:bg-slate-800'
       }`}
     >
       {children}

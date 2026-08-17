@@ -1,1 +1,7 @@
 @import "tailwindcss";
+
+/* Tailwind v4 defaults `dark:` to the `prefers-color-scheme` media query.
+   This app wants a manual toggle instead, so `dark:` is redefined to key off
+   a `.dark` class on <html> (set by src/lib/theme.ts) — the v3-style
+   "class strategy", expressed in v4's CSS-first config. */
+@custom-variant dark (&:where(.dark, .dark *));

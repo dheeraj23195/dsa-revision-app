@@ -19,10 +19,10 @@ const REASON_LABELS: Record<PickReason, string> = {
 };
 
 const REASON_STYLES: Record<PickReason, string> = {
-  overdue: 'bg-rose-100 text-rose-700',
-  'due-today': 'bg-amber-100 text-amber-700',
-  coverage: 'bg-sky-100 text-sky-700',
-  'hard-interleave': 'bg-violet-100 text-violet-700',
+  overdue: 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300',
+  'due-today': 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
+  coverage: 'bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300',
+  'hard-interleave': 'bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300',
 };
 
 export function TodayScreen() {
@@ -83,24 +83,24 @@ export function TodayScreen() {
   }, [questions, reviewLogs, allPlanIds, today]);
 
   if (!questions || !reviewLogs || !dayPlan) {
-    return <div className="p-8 text-slate-500">Loading…</div>;
+    return <div className="p-8 text-slate-500 dark:text-slate-400">Loading…</div>;
   }
 
   return (
     <div className="mx-auto max-w-3xl p-6">
       <header className="mb-4">
-        <h1 className="text-2xl font-bold text-slate-800">Today</h1>
+        <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100">Today</h1>
         {progress && (
-          <p className="mt-1 text-sm text-slate-500">
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
             {progress.doneToday} of {progress.totalToday} done today · {progress.patternsCovered} patterns covered /{' '}
             {progress.patternsTotal} total · {progress.reviewsPending} reviews pending
           </p>
         )}
-        {mixSummary && <p className="mt-1 text-xs text-slate-400">Today's mix: {mixSummary}</p>}
+        {mixSummary && <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">Today's mix: {mixSummary}</p>}
       </header>
 
       {plannedQuestions.length === 0 && (
-        <p className="rounded-lg bg-slate-50 p-6 text-center text-sm text-slate-500">
+        <p className="rounded-lg bg-slate-50 p-6 text-center text-sm text-slate-500 dark:bg-slate-800/50 dark:text-slate-400">
           Nothing to review yet — mark some questions Done in the Bank to start the rotation.
         </p>
       )}
@@ -116,7 +116,7 @@ export function TodayScreen() {
 
 function TodayCard({ question: q, reason }: { question: Question; reason: PickReason | undefined }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4">
+    <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           {q.url ? (
@@ -124,14 +124,14 @@ function TodayCard({ question: q, reason }: { question: Question; reason: PickRe
               href={q.url}
               target="_blank"
               rel="noreferrer"
-              className="font-medium text-slate-800 hover:text-indigo-600 hover:underline"
+              className="font-medium text-slate-800 hover:text-indigo-600 hover:underline dark:text-slate-100 dark:hover:text-indigo-400"
             >
               {q.title}
             </a>
           ) : (
-            <span className="font-medium text-slate-800">{q.title}</span>
+            <span className="font-medium text-slate-800 dark:text-slate-100">{q.title}</span>
           )}
-          <p className="mt-0.5 text-xs text-slate-400">{q.stepTitle}</p>
+          <p className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">{q.stepTitle}</p>
         </div>
         {reason && (
           <span
