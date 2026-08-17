@@ -81,3 +81,38 @@ export async function unmarkQuestionDone(id: string): Promise<void> {
     status: 'todo',
   });
 }
+
+// Bulk variants for the Bank's shift-click range-check (§7: "the user will
+// bulk-check what they already completed in June"). Same per-question rules
+// as the single-question versions above, applied to every id in the range in
+// one transaction; ids already in the target state are skipped so a range
+// that mixes done/not-done rows doesn't clobber SRS progress that's already
+// mid-rotation.
+export async function markQuestionsDone(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const today = todayISO();
+  await db.questions
+    .where('id')
+    .anyOf(ids)
+    .and((q) => !q.done)
+    .modify({
+      done: true,
+      doneAt: today,
+      srs: { ladderIndex: 0, dueDate: addDaysISO(today, 1), lapses: 0, reps: 0 },
+      status: 'learning',
+    });
+}
+
+export async function unmarkQuestionsDone(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  await db.questions
+    .where('id')
+    .anyOf(ids)
+    .and((q) => q.done)
+    .modify({
+      done: false,
+      doneAt: undefined,
+      srs: null,
+      status: 'todo',
+    });
+}

@@ -5,7 +5,13 @@
 
 import { useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, markQuestionDone, unmarkQuestionDone } from '../db';
+import {
+  db,
+  markQuestionDone,
+  markQuestionsDone,
+  unmarkQuestionDone,
+  unmarkQuestionsDone,
+} from '../db';
 import type { Difficulty, Question, QuestionStatus } from '../types';
 import { DifficultyBadge, PatternTags, StatusChip } from '../components/Badges';
 import { dueLabel } from '../lib/date';
@@ -38,6 +44,9 @@ export function BankScreen() {
   const [patterns, setPatterns] = useState<Set<string>>(new Set());
   const [steps, setSteps] = useState<Set<number>>(new Set());
   const [collapsedSteps, setCollapsedSteps] = useState<Set<number>>(new Set());
+  // Shift-click range-check (§7): the id most recently toggled by a click,
+  // used as the other end of the range on the next shift-click.
+  const [lastCheckedId, setLastCheckedId] = useState<string | null>(null);
 
   const allPatterns = useMemo(() => {
     if (!questions) return [];
@@ -82,6 +91,19 @@ export function BankScreen() {
     return [...byStep.entries()].sort((a, b) => a[0] - b[0]);
   }, [filtered]);
 
+  // Flattened, on-screen order of question ids — the range a shift-click
+  // spans is defined over what's actually visible (filters applied,
+  // collapsed steps excluded), matching what the user sees between their
+  // last click and this one.
+  const visibleIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const [step, stepQuestions] of grouped) {
+      if (collapsedSteps.has(step)) continue;
+      for (const q of stepQuestions) ids.push(q.id);
+    }
+    return ids;
+  }, [grouped, collapsedSteps]);
+
   if (!questions) {
     return <div className="p-8 text-slate-500">Loading…</div>;
   }
@@ -90,7 +112,31 @@ export function BankScreen() {
   const anyFilterActive =
     search.trim() !== '' || difficulties.size > 0 || statuses.size > 0 || steps.size > 0 || patterns.size > 0;
 
-  async function handleToggle(q: Question) {
+  async function handleToggle(q: Question, shiftKey: boolean) {
+    const targetDone = !q.done;
+
+    if (shiftKey && lastCheckedId) {
+      const from = visibleIds.indexOf(lastCheckedId);
+      const to = visibleIds.indexOf(q.id);
+      if (from !== -1 && to !== -1) {
+        const [lo, hi] = from < to ? [from, to] : [to, from];
+        const rangeIds = visibleIds.slice(lo, hi + 1);
+        if (targetDone) {
+          await markQuestionsDone(rangeIds);
+        } else {
+          const ok = window.confirm(
+            `Uncheck ${rangeIds.length} questions? This resets spaced-repetition progress for all of them.`,
+          );
+          if (!ok) return;
+          await unmarkQuestionsDone(rangeIds);
+        }
+        setLastCheckedId(q.id);
+        return;
+      }
+      // Last-clicked id has scrolled out of the current filtered view —
+      // fall back to single-row toggle below rather than guessing a range.
+    }
+
     if (q.done) {
       const ok = window.confirm(
         `Uncheck "${q.title}"? This resets its spaced-repetition progress back to not-started.`,
@@ -100,6 +146,7 @@ export function BankScreen() {
     } else {
       await markQuestionDone(q.id);
     }
+    setLastCheckedId(q.id);
   }
 
   return (
@@ -108,6 +155,7 @@ export function BankScreen() {
         <h1 className="text-2xl font-bold text-slate-800">Question Bank</h1>
         <p className="mt-1 text-sm text-slate-500">
           {totalDone} / {questions.length} done overall
+          <span className="text-slate-400"> · shift-click a checkbox to check/uncheck a range</span>
         </p>
       </header>
 
@@ -230,7 +278,7 @@ function LectureGroups({
   onToggle,
 }: {
   questions: Question[];
-  onToggle: (q: Question) => void;
+  onToggle: (q: Question, shiftKey: boolean) => void;
 }) {
   const groups = useMemo(() => {
     const byLecture = new Map<string, Question[]>();
@@ -272,16 +320,21 @@ function QuestionRow({
   onToggle,
 }: {
   question: Question;
-  onToggle: (q: Question) => void;
+  onToggle: (q: Question, shiftKey: boolean) => void;
 }) {
   return (
     <div className="flex items-center gap-3 border-t border-slate-50 px-4 py-2 first:border-t-0">
       <input
         type="checkbox"
         checked={q.done}
-        onChange={() => onToggle(q)}
+        readOnly
+        onClick={(e) => {
+          e.preventDefault();
+          onToggle(q, e.shiftKey);
+        }}
         className="h-4 w-4 shrink-0 accent-emerald-600"
         aria-label={`Mark "${q.title}" done`}
+        title="Shift-click to check/uncheck everything between this and your last click"
       />
       <div className="min-w-0 flex-1">
         {q.url ? (
