@@ -72,8 +72,17 @@ export function TodayScreen() {
   const extraIds = dayPlan?.extraIds ?? [];
   const allPlanIds = useMemo(() => [...plannedIds, ...extraIds], [plannedIds, extraIds]);
 
+  // Defense-in-depth alongside db.ts's write-side pruneFromTodayPlan (which
+  // removes an unmarked id from the cached plan on unmark): even if some id
+  // ever ends up stale here for a reason pruneFromTodayPlan didn't catch,
+  // this guarantees Today can never render — and so never let the user
+  // attempt to rate — a question that isn't currently done:true. Without
+  // this, a stale id resolves to a real Question row (unmarking doesn't
+  // delete the row, just flips done/srs) and renders as if nothing were
+  // wrong, right up until a rating attempt silently no-ops because there's
+  // no srs left to update.
   const resolve = (ids: string[]) =>
-    ids.map((id) => questionsById.get(id)).filter((q): q is Question => q !== undefined);
+    ids.map((id) => questionsById.get(id)).filter((q): q is Question => q !== undefined && q.done);
   const plannedQuestions = resolve(plannedIds);
   const extraQuestions = resolve(extraIds);
 

@@ -88,13 +88,23 @@ async function pruneFromTodayPlan(ids: string[]): Promise<void> {
   const plan = await db.dayPlans.get(date);
   if (!plan) return;
 
-  const questionIds = plan.questionIds.filter((qid) => !idSet.has(qid));
-  const extraIds = plan.extraIds.filter((qid) => !idSet.has(qid));
-  if (questionIds.length === plan.questionIds.length && extraIds.length === plan.extraIds.length) {
+  // Defensive: normalize in case a plan row from an earlier code version
+  // predates a field (e.g. `reasons` didn't exist until partway through
+  // this project's history). `db.transaction` rolls the whole thing back on
+  // any throw, and this function runs inside unmarkQuestionDone's
+  // transaction — an unhandled exception here would silently undo that
+  // question's done:false write too, not just fail to prune.
+  const existingQuestionIds = plan.questionIds ?? [];
+  const existingExtraIds = plan.extraIds ?? [];
+  const existingReasons = plan.reasons ?? {};
+
+  const questionIds = existingQuestionIds.filter((qid) => !idSet.has(qid));
+  const extraIds = existingExtraIds.filter((qid) => !idSet.has(qid));
+  if (questionIds.length === existingQuestionIds.length && extraIds.length === existingExtraIds.length) {
     return; // none of these ids were actually in today's plan
   }
 
-  const reasons = { ...plan.reasons };
+  const reasons = { ...existingReasons };
   for (const qid of ids) delete reasons[qid];
   await db.dayPlans.update(date, { questionIds, extraIds, reasons });
 }
@@ -200,10 +210,18 @@ export async function getOrCreateDayPlan(date: string): Promise<DayPlan> {
 //   - 'first-solve' if this is the question's first review ever (reps was
 //     still 0 going into this rating).
 //   - 'review' otherwise.
+//
+// Eligibility is decided by `srs` alone, not `done` — the two are normally
+// set together (mark/unmark flip both at once), but rating a question
+// should never depend on its current done state, only on whether there's
+// SRS state to apply the ladder to. Checking `done` here as well was
+// redundant at best and misleading at worst: it reads as if being Done
+// matters for whether a rating "counts," which it doesn't — this is purely
+// "is there a ladder position to advance."
 export async function submitRating(questionId: string, rating: Rating, date: string): Promise<void> {
   await db.transaction('rw', db.questions, db.reviewLogs, db.dayPlans, async () => {
     const q = await db.questions.get(questionId);
-    if (!q || !q.done || !q.srs) return; // not an eligible Done-with-SRS question — nothing to rate
+    if (!q || !q.srs) return; // no SRS state to update
 
     const plan = await db.dayPlans.get(date);
     const kind: ReviewKind = plan?.extraIds.includes(questionId)
