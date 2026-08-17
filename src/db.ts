@@ -73,14 +73,49 @@ export async function markQuestionDone(id: string): Promise<void> {
   });
 }
 
+// Removes ids from TODAY's cached plan only (§6.1's dayPlans row for
+// todayISO()) — never other dates. Other dates' dayPlans rows are a
+// historical record of what was actually reviewed that day, not a live
+// view; only today's is still being rendered/consumed. Prunes exactly the
+// invalidated entries from questionIds/extraIds/reasons, leaving the rest
+// of the plan's order and picks untouched, so the anti-reshuffle guarantee
+// (§6.1: "refreshing the page doesn't reshuffle it") holds for everything
+// that's still valid.
+async function pruneFromTodayPlan(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const idSet = new Set(ids);
+  const date = todayISO();
+  const plan = await db.dayPlans.get(date);
+  if (!plan) return;
+
+  const questionIds = plan.questionIds.filter((qid) => !idSet.has(qid));
+  const extraIds = plan.extraIds.filter((qid) => !idSet.has(qid));
+  if (questionIds.length === plan.questionIds.length && extraIds.length === plan.extraIds.length) {
+    return; // none of these ids were actually in today's plan
+  }
+
+  const reasons = { ...plan.reasons };
+  for (const qid of ids) delete reasons[qid];
+  await db.dayPlans.update(date, { questionIds, extraIds, reasons });
+}
+
+// §4: unchecking Done resets srs to null / status 'todo'. Also removes the
+// question from today's cached plan (see pruneFromTodayPlan) — without
+// this, a question un-Done in the Bank kept showing up in Today forever,
+// since the cached plan only ever stores question IDs and the question row
+// itself still exists (just done:false), so Today's render (which resolves
+// IDs to full Question objects) kept finding and showing it.
 export async function unmarkQuestionDone(id: string): Promise<void> {
-  const q = await db.questions.get(id);
-  if (!q || !q.done) return;
-  await db.questions.update(id, {
-    done: false,
-    doneAt: undefined,
-    srs: null,
-    status: 'todo',
+  await db.transaction('rw', db.questions, db.dayPlans, async () => {
+    const q = await db.questions.get(id);
+    if (!q || !q.done) return;
+    await db.questions.update(id, {
+      done: false,
+      doneAt: undefined,
+      srs: null,
+      status: 'todo',
+    });
+    await pruneFromTodayPlan([id]);
   });
 }
 
@@ -107,16 +142,22 @@ export async function markQuestionsDone(ids: string[]): Promise<void> {
 
 export async function unmarkQuestionsDone(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
-  await db.questions
-    .where('id')
-    .anyOf(ids)
-    .and((q) => q.done)
-    .modify({
-      done: false,
-      doneAt: undefined,
-      srs: null,
-      status: 'todo',
-    });
+  await db.transaction('rw', db.questions, db.dayPlans, async () => {
+    // Captured before modify() flips `done`, since the same `.and(q =>
+    // q.done)` filter run afterward would no longer match any of them.
+    const actuallyUnmarked = await db.questions.where('id').anyOf(ids).and((q) => q.done).primaryKeys();
+    await db.questions
+      .where('id')
+      .anyOf(ids)
+      .and((q) => q.done)
+      .modify({
+        done: false,
+        doneAt: undefined,
+        srs: null,
+        status: 'todo',
+      });
+    await pruneFromTodayPlan(actuallyUnmarked as string[]);
+  });
 }
 
 // §6.1: "the plan persisting via dayPlans... so refreshing the page doesn't
