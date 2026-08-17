@@ -1,6 +1,6 @@
 // Screen 1 — Today (§6.1). Renders the day's plan from the pure scheduler
 // (§5), cached in `dayPlans` so a refresh doesn't reshuffle it. Cards start
-// with an "Attempted" button; clicking it reveals the four rating buttons
+// with an "Attempted" checkbox; checking it reveals the four rating buttons
 // (§4). "One More" (§5) appears once every planned + extra card is rated.
 
 import { useEffect, useMemo, useState } from 'react';
@@ -27,8 +27,10 @@ const REASON_STYLES: Record<PickReason, string> = {
 
 const RATINGS: Rating[] = ['again', 'hard', 'good', 'easy'];
 
+// "Again" is the internal/schema value everywhere (types.ts, lib/srs.ts, the
+// 9 ladder fixtures) — this is a UI label change only, not a rating rename.
 const RATING_LABELS: Record<Rating, string> = {
-  again: 'Again',
+  again: "Couldn't solve without help",
   hard: 'Hard',
   good: 'Good',
   easy: 'Easy',
@@ -273,12 +275,15 @@ function TodayCard({
           ))}
         </div>
       ) : (
-        <button
-          onClick={onAttempt}
-          className="mt-3 rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
-        >
+        <label className="mt-3 flex w-fit cursor-pointer items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
+          <input
+            type="checkbox"
+            onChange={onAttempt}
+            className="h-4 w-4 accent-indigo-600"
+            aria-label={`Mark "${q.title}" attempted`}
+          />
           Attempted
-        </button>
+        </label>
       )}
     </div>
   );

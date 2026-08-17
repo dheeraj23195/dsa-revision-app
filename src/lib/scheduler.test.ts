@@ -318,3 +318,37 @@ describe('Fixture H — mastered questions leave the regular rotation but stay e
     expect(result.picks[0]).toEqual({ questionId: 'h-mastered-covered', reason: 'hard-interleave' });
   });
 });
+
+// AMENDMENT (docs/SPEC-AMENDMENTS.md #1, not in the original §5): weak-pattern
+// reinforcement. A pattern is weak as of date D if any of its questions has
+// an 'again'-rated ReviewLog dated within the 7 days strictly before D. Weak
+// patterns now sort FIRST in the coverage-pick step, ahead of the original
+// fewest-total-reviews rule.
+describe('Fixture I — weak-pattern reinforcement wins a coverage slot, then expires after 7 days', () => {
+  const questions: Question[] = [
+    q({ id: 'q-weak-dp', difficulty: 'Medium', patterns: ['DP'], doneAt: '2026-04-01', srs: { ladderIndex: 1, dueDate: '2026-06-01', lapses: 0, reps: 3 } }),
+    q({ id: 'q-not-weak-greedy', difficulty: 'Medium', patterns: ['Greedy'], doneAt: '2026-04-01', srs: { ladderIndex: 0, dueDate: '2026-06-01', lapses: 0, reps: 0 } }),
+  ];
+  // DP already has 2 historical (non-'again') reviews -- strictly MORE than
+  // Greedy's 0 -- so under the original fewest-total-reviews rule alone,
+  // Greedy would win this coverage slot. The 'again' review on Jan 07 is
+  // what makes DP "weak" as of May 10 (within the 7 days before it), and
+  // bumps DP's total review count to 3 -- even higher above Greedy's 0.
+  const reviewLogs: ReviewLog[] = [
+    { id: 'log-1', questionId: 'q-weak-dp', date: '2026-01-01', rating: 'good', kind: 'review' },
+    { id: 'log-2', questionId: 'q-weak-dp', date: '2026-01-02', rating: 'good', kind: 'review' },
+    { id: 'log-3', questionId: 'q-weak-dp', date: '2026-05-07', rating: 'again', kind: 'review' },
+  ];
+
+  it('weak pattern wins despite MORE total reviews (3) than the non-weak pattern (0)', () => {
+    const date = '2026-05-10'; // May 07 is 3 days before -> within the 7-day window
+    const result = planDayDetailed(questions, reviewLogs, settings(), date);
+    expect(result.picks[0]).toEqual({ questionId: 'q-weak-dp', reason: 'coverage' });
+  });
+
+  it('boost expires after the 7-day window: 10 days later, fewest-total-reviews (Greedy, 0) wins again', () => {
+    const date = '2026-05-20'; // May 07 is 13 days before -> outside the 7-day window [May 13, May 19]
+    const result = planDayDetailed(questions, reviewLogs, settings(), date);
+    expect(result.picks[0]).toEqual({ questionId: 'q-not-weak-greedy', reason: 'coverage' });
+  });
+});

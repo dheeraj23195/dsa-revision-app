@@ -5,9 +5,14 @@
 //
 // Only `done: true` questions are ever candidates (§5: "Only questions with
 // done: true are ever scheduled for review").
+//
+// This file also carries one post-hoc amendment to §5 itself (weak-pattern
+// reinforcement, marked inline below) — see docs/SPEC-AMENDMENTS.md for the
+// full record of what changed and why, kept separate from the "design
+// decision" comments that just resolve ambiguity already latent in §5.
 
 import type { DayPlan, Difficulty, PickReason, Question, ReviewLog, Settings } from '../types';
-import { daysBetween } from './date';
+import { addDaysISO, daysBetween } from './date';
 
 export type Mix = 'hardDay' | 'mediumDay';
 
@@ -97,6 +102,35 @@ export function patternReviewCounts(questions: Question[], reviewLogs: ReviewLog
   return counts;
 }
 
+// AMENDMENT (see docs/SPEC-AMENDMENTS.md #1, not in the original §5): a
+// pattern is "weak" as of `date` if any question carrying it has an
+// 'again'-rated ReviewLog dated within the `windowDays` days strictly
+// before `date` (i.e. [date - windowDays, date - 1] — not including `date`
+// itself). Same shape as patternReviewCounts: needs `questions` to map a
+// ReviewLog's questionId back to its patterns.
+export function weakPatterns(
+  questions: Question[],
+  reviewLogs: ReviewLog[],
+  date: string,
+  windowDays = 7,
+): Set<string> {
+  const patternsById = new Map<string, string[]>();
+  for (const q of questions) patternsById.set(q.id, q.patterns);
+  const windowStart = addDaysISO(date, -windowDays);
+
+  const weak = new Set<string>();
+  for (const log of reviewLogs) {
+    if (log.rating !== 'again') continue;
+    if (log.date < windowStart || log.date >= date) continue;
+    for (const p of patternsById.get(log.questionId) ?? []) weak.add(p);
+  }
+  return weak;
+}
+
+function isWeak(q: Question, weakSet: Set<string>): boolean {
+  return q.patterns.some((p) => weakSet.has(p));
+}
+
 // A question's coverage "score" is the least-reviewed of its own patterns —
 // its most under-covered angle. Patternless questions score 0 (always
 // eligible; never blocked from breadth picks for lack of tags).
@@ -129,6 +163,7 @@ function byDoneAtAsc(a: Question, b: Question): number {
 function pickFromPool(
   basePool: Question[],
   counts: Map<string, number>,
+  weakSet: Set<string>,
   date: string,
   allowMastered: boolean,
 ): PlannedPick | null {
@@ -145,10 +180,14 @@ function pickFromPool(
   const dueToday = pool.filter((q) => q.srs!.dueDate === date).sort(byDoneAtAsc);
   if (dueToday.length > 0) return { questionId: dueToday[0].id, reason: 'due-today' };
 
-  // 3. Coverage pick — fewest total reviews among the pool's own patterns.
-  const ranked = pool
-    .slice()
-    .sort((a, b) => leastCoveredScore(a, counts) - leastCoveredScore(b, counts) || byDoneAtAsc(a, b));
+  // 3. Coverage pick. AMENDMENT (docs/SPEC-AMENDMENTS.md #1): weak patterns
+  // sort first, then fewest total reviews (as originally specced), then
+  // older doneAt as the final tie-break.
+  const ranked = pool.slice().sort((a, b) => {
+    const weakDiff = Number(isWeak(b, weakSet)) - Number(isWeak(a, weakSet));
+    if (weakDiff !== 0) return weakDiff;
+    return leastCoveredScore(a, counts) - leastCoveredScore(b, counts) || byDoneAtAsc(a, b);
+  });
   return { questionId: ranked[0].id, reason: 'coverage' };
 }
 
@@ -156,6 +195,7 @@ function pickForSlot(
   slot: Slot,
   questions: Question[],
   counts: Map<string, number>,
+  weakSet: Set<string>,
   date: string,
   usedIds: Set<string>,
 ): PlannedPick | null {
@@ -169,7 +209,8 @@ function pickForSlot(
     // *most*-covered pattern (a deliberate duplicate) instead of the least
     // covered one — and, per §4, this branch alone may draw on mastered
     // questions, since duplicating an already-mastered Hard pattern is
-    // exactly the "stress-test familiar patterns" case §1 describes.
+    // exactly the "stress-test familiar patterns" case §1 describes. Not
+    // affected by weak-pattern reinforcement — see SPEC-AMENDMENTS.md #1.
     if (slot.interleaveEligible && difficulty === 'Hard') {
       const alreadyCovered = basePool.filter((q) => mostCoveredScore(q, counts) > 0);
       if (alreadyCovered.length > 0) {
@@ -183,7 +224,7 @@ function pickForSlot(
       // normal (non-mastered) pick rather than picking arbitrarily.
     }
 
-    const pick = pickFromPool(basePool, counts, date, false);
+    const pick = pickFromPool(basePool, counts, weakSet, date, false);
     if (pick) return pick;
     // pickFromPool returned null: basePool had candidates, but all of them
     // were mastered — relax to the next difficulty rather than serving a
@@ -206,11 +247,12 @@ export function pickOneMore(
   date: string,
 ): PlannedPick | null {
   const counts = patternReviewCounts(questions, reviewLogs);
+  const weakSet = weakPatterns(questions, reviewLogs, date);
   for (const difficulty of ['Medium', 'Hard', 'Easy'] as const) {
     const basePool = questions.filter(
       (q) => q.done && q.srs !== null && q.difficulty === difficulty && !excludeIds.has(q.id),
     );
-    const pick = pickFromPool(basePool, counts, date, true);
+    const pick = pickFromPool(basePool, counts, weakSet, date, true);
     if (pick) return pick;
   }
   return null;
@@ -244,12 +286,13 @@ export function planDayDetailed(
   const interleaveDay = isHardInterleaveDay(date, settings.hardInterleaveEvery);
   const mix = decideMix(questions, settings, date, interleaveDay);
   const counts = patternReviewCounts(questions, reviewLogs);
+  const weakSet = weakPatterns(questions, reviewLogs, date);
   const questionsById = new Map(questions.map((q) => [q.id, q]));
   const usedIds = new Set<string>();
   const picks: PlannedPick[] = [];
 
   for (const slot of buildSlots(mix, interleaveDay)) {
-    const pick = pickForSlot(slot, questions, counts, date, usedIds);
+    const pick = pickForSlot(slot, questions, counts, weakSet, date, usedIds);
     if (pick) {
       picks.push(pick);
       usedIds.add(pick.questionId);
