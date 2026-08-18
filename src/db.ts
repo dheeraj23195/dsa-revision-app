@@ -45,6 +45,22 @@ class RevisionDB extends Dexie {
 
 export const db = new RevisionDB();
 
+declare global {
+  interface Window {
+    db?: RevisionDB;
+  }
+}
+
+// Dev-only console debugging aid: `db.questions.toArray()` etc. straight
+// from devtools, instead of hand-inspecting IndexedDB. import.meta.env.DEV
+// is statically false in a production build, so Vite dead-code-eliminates
+// this whole block — it never ships. The `window` check is separate: this
+// module also loads under Node (db.test.ts, via fake-indexeddb), where
+// there's no `window` at all.
+if (import.meta.env.DEV && typeof window !== 'undefined') {
+  window.db = db;
+}
+
 export async function getSettings(): Promise<Settings> {
   const settings = await db.settings.get(1);
   if (settings) return settings;
