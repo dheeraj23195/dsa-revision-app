@@ -281,3 +281,16 @@ export async function resetAllProgress(): Promise<void> {
     await db.dayPlans.clear();
   });
 }
+
+// §7 CSV bulk import — the only Dexie-touching half of the import feature;
+// lib/csvImport.ts does all the parsing/matching/diffing as pure functions
+// and hands back plain Question objects ready to write. `toUpdate` rows are
+// full existing records with only their catalog fields overwritten (see
+// buildImportWrites) — bulkPut replaces the whole record, so this must
+// already be the complete merged object, not a partial patch.
+export async function commitImport(toAdd: Question[], toUpdate: Question[]): Promise<void> {
+  await db.transaction('rw', db.questions, async () => {
+    if (toAdd.length > 0) await db.questions.bulkAdd(toAdd);
+    if (toUpdate.length > 0) await db.questions.bulkPut(toUpdate);
+  });
+}
