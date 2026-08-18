@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { BankScreen } from './screens/BankScreen';
 import { TodayScreen } from './screens/TodayScreen';
+import { CoverageScreen } from './screens/CoverageScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
 import { applyTheme, getInitialTheme, type Theme } from './lib/theme';
 
-type Screen = 'today' | 'bank' | 'settings';
+type Screen = 'today' | 'bank' | 'coverage' | 'settings';
 
 function App() {
   const [screen, setScreen] = useState<Screen>('today');
@@ -21,6 +22,7 @@ function App() {
           <div className="flex gap-1">
             <NavTab label="Today" active={screen === 'today'} onClick={() => setScreen('today')} />
             <NavTab label="Bank" active={screen === 'bank'} onClick={() => setScreen('bank')} />
+            <NavTab label="Coverage" active={screen === 'coverage'} onClick={() => setScreen('coverage')} />
             <NavTab label="Settings" active={screen === 'settings'} onClick={() => setScreen('settings')} />
           </div>
           <button
@@ -33,6 +35,7 @@ function App() {
       </nav>
       {screen === 'today' && <TodayScreen />}
       {screen === 'bank' && <BankScreen />}
+      {screen === 'coverage' && <CoverageScreen />}
       {screen === 'settings' && <SettingsScreen />}
     </div>
   );
