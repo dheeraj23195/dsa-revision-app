@@ -70,6 +70,14 @@ export async function getSettings(): Promise<Settings> {
   return restored;
 }
 
+// §6.4 Settings screen. Whether/when this actually changes what Today shows
+// is decided entirely by getOrCreateDayPlan's "locked in" rule above — this
+// function just persists the change.
+export async function updateSettings(changes: Partial<Omit<Settings, 'id'>>): Promise<void> {
+  await getSettings(); // ensures the row exists before update() targets it
+  await db.settings.update(1, changes);
+}
+
 export function newReviewLogId(): string {
   return crypto.randomUUID();
 }
@@ -190,20 +198,43 @@ export async function unmarkQuestionsDone(ids: string[]): Promise<void> {
 // reshuffle it." Reads the cached plan for `date` if one exists; otherwise
 // runs the pure scheduler (§5) once and persists the result. Safe to call
 // more than once for the same date (e.g. React StrictMode's double-invoked
-// effects) — planDay is a pure function of its inputs, so a redundant
-// second computation just overwrites the cache with an identical row.
+// effects) — planDay is a pure function of its inputs, so a redundant call
+// with unchanged inputs just overwrites the cache with an identical row.
 //
-// Exception: a cached plan with zero picks is not treated as locked in.
-// Today defaults to the first tab a user sees, so it can run (and cache) a
-// plan before anything has ever been marked Done — e.g. right after first
-// install, or straight after a bulk-import, before the one-time shift-click
-// pass in the Bank. There is nothing in an empty plan to protect from
-// reshuffling, so it's safe — and necessary — to recompute until it
-// actually has something to show.
+// "Locked in" means *started*, not merely *non-empty*: a cached plan is
+// only treated as locked in once at least one of its picks (questionIds OR
+// extraIds) has actually been rated today. Until then, it's regenerated
+// from scratch on every call, using whatever the current questions/
+// reviewLogs/settings are at that moment. This one rule covers two cases
+// that are really the same thing:
+//   - An empty plan (nothing was Done yet when Today was first opened —
+//     e.g. right after install or a bulk-import, before the Bank's
+//     shift-click pass) needs to pick something up once real Done
+//     questions exist, without waiting for tomorrow.
+//   - A non-empty but still fully-UNRATED plan should also pick up a
+//     Settings change (dailyMix / hardInterleaveEvery) or newly-marked-Done
+//     questions immediately, not "starting tomorrow" — the user hasn't
+//     acted on today's plan yet, so there is nothing to protect from
+//     reshuffling. The instant even one card is rated, today is
+//     "underway": further Settings changes (or Bank edits) apply starting
+//     tomorrow, and today's plan — rated or not-yet-rated picks alike —
+//     stays exactly as it was, honoring the anti-reshuffle guarantee for a
+//     day actually in progress. (A finer-grained "keep rated picks, replace
+//     only unrated ones" was considered and rejected: reconciling an old
+//     mix's slots against a new mix's differently-shaped slot list by
+//     difficulty is a real rabbit hole for a rare edge case, and getting it
+//     subtly wrong — e.g. ending up with more cards than the new mix
+//     implies — is a worse failure mode than "wait until tomorrow.")
 export async function getOrCreateDayPlan(date: string): Promise<DayPlan> {
   const existing = await db.dayPlans.get(date);
-  if (existing && (existing.questionIds.length > 0 || existing.extraIds.length > 0)) {
-    return existing;
+  if (existing) {
+    const allIds = [...existing.questionIds, ...existing.extraIds];
+    if (allIds.length > 0) {
+      const ratedToday = await db.reviewLogs.where('date').equals(date).toArray();
+      const ratedIds = new Set(ratedToday.map((log) => log.questionId));
+      const startedToday = allIds.some((id) => ratedIds.has(id));
+      if (startedToday) return existing;
+    }
   }
 
   const [questions, reviewLogs, settings] = await Promise.all([

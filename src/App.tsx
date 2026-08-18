@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import { BankScreen } from './screens/BankScreen';
 import { TodayScreen } from './screens/TodayScreen';
+import { SettingsScreen } from './screens/SettingsScreen';
 import { ImportScreen } from './admin/ImportScreen';
 import { applyTheme, getInitialTheme, type Theme } from './lib/theme';
-import { resetAllProgress } from './db';
 
-type Screen = 'today' | 'bank' | 'import';
+type Screen = 'today' | 'bank' | 'settings' | 'import';
 
 function App() {
   const [screen, setScreen] = useState<Screen>('today');
@@ -15,14 +15,6 @@ function App() {
     applyTheme(theme);
   }, [theme]);
 
-  async function handleResetProgress() {
-    const ok = window.confirm(
-      'Reset ALL progress? This clears every question\'s Done/SRS state, all review history, and the cached day plan. The question catalog itself (titles, links, difficulty, patterns) is untouched. This cannot be undone.',
-    );
-    if (!ok) return;
-    await resetAllProgress();
-  }
-
   return (
     <div className="min-h-screen bg-white text-slate-800 dark:bg-slate-900 dark:text-slate-100">
       <nav className="border-b border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
@@ -30,6 +22,7 @@ function App() {
           <div className="flex gap-1">
             <NavTab label="Today" active={screen === 'today'} onClick={() => setScreen('today')} />
             <NavTab label="Bank" active={screen === 'bank'} onClick={() => setScreen('bank')} />
+            <NavTab label="Settings" active={screen === 'settings'} onClick={() => setScreen('settings')} />
             {/* FUTURE ADMIN GATE: once a login/role system exists, wrap just
                 this tab (and the `screen === 'import'` render branch below)
                 in an isAdmin check — e.g. `{isAdmin && <NavTab .../>}`. No
@@ -39,30 +32,17 @@ function App() {
                 change here, not a refactor of Bank/Today. */}
             <NavTab label="Import" active={screen === 'import'} onClick={() => setScreen('import')} />
           </div>
-          <div className="flex items-center gap-2">
-            {/* Temporary placement — pulled forward from Phase 2's §6.4
-                danger-zone reset (belongs on a real Settings screen
-                eventually). Only here so a one-time "clear test data before
-                the real bulk-mark pass" doesn't require raw Dexie commands
-                in devtools. */}
-            <button
-              onClick={handleResetProgress}
-              className="rounded-md px-2.5 py-1 text-xs font-medium text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-900/30"
-              title="Danger zone: resets all Done/SRS/review progress. Catalog data is untouched."
-            >
-              Reset all progress
-            </button>
-            <button
-              onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
-              className="rounded-md px-2.5 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100"
-            >
-              {theme === 'dark' ? 'Light mode' : 'Dark mode'}
-            </button>
-          </div>
+          <button
+            onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+            className="rounded-md px-2.5 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100"
+          >
+            {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+          </button>
         </div>
       </nav>
       {screen === 'today' && <TodayScreen />}
       {screen === 'bank' && <BankScreen />}
+      {screen === 'settings' && <SettingsScreen />}
       {screen === 'import' && <ImportScreen />}
     </div>
   );

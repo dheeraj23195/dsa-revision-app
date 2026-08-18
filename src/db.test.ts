@@ -7,7 +7,7 @@
 
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { db, getOrCreateDayPlan, markQuestionDone, submitRating, unmarkQuestionDone } from './db';
+import { db, getOrCreateDayPlan, markQuestionDone, submitRating, unmarkQuestionDone, updateSettings } from './db';
 import { todayISO } from './lib/date';
 import type { Question } from './types';
 
@@ -95,5 +95,64 @@ describe('mark -> uncheck -> attempt rate while done:false -> re-mark', () => {
 
     const logs = await db.reviewLogs.where('questionId').equals(QID).toArray();
     expect(logs).toHaveLength(0); // still no rating history — nothing was fabricated in step 3
+  });
+});
+
+describe('getOrCreateDayPlan: a Settings change applies immediately if today has not been started, else waits for tomorrow', () => {
+  const HID = 'test-hard-q';
+
+  beforeEach(async () => {
+    // beforeEach above already seeded QID as a Medium question and marked
+    // nothing done; add a Hard candidate so a dailyMix change is actually
+    // observable in which questions get picked, not just plan metadata.
+    await db.questions.add({
+      id: HID,
+      title: 'Test Hard Question',
+      url: '',
+      difficulty: 'Hard',
+      step: 3,
+      stepTitle: 'Step 3: Arrays',
+      patterns: ['Test Pattern'],
+      done: false,
+      srs: null,
+      status: 'todo',
+    });
+    await markQuestionDone(QID);
+    await markQuestionDone(HID);
+    // Push both due dates far out so overdue/due-today never fire — only
+    // the coverage step (and therefore dailyMix's slot selection) decides
+    // what gets picked, keeping this test focused on the mix, not on due
+    // dates fighting for priority.
+    await db.questions.update(QID, { srs: { ladderIndex: 0, dueDate: '2027-01-01', lapses: 0, reps: 0 } });
+    await db.questions.update(HID, { srs: { ladderIndex: 0, dueDate: '2027-01-01', lapses: 0, reps: 0 } });
+  });
+
+  it('forcing mediumDay never includes the Hard question at all', async () => {
+    await updateSettings({ dailyMix: 'mediumDay' });
+    const plan = await getOrCreateDayPlan(TODAY);
+    expect(plan.questionIds).toEqual([QID]);
+  });
+
+  it('switching to hardDay BEFORE anything is rated today recomputes immediately and now includes the Hard question', async () => {
+    await updateSettings({ dailyMix: 'mediumDay' });
+    await getOrCreateDayPlan(TODAY); // caches the mediumDay-only plan, [QID]
+
+    await updateSettings({ dailyMix: 'hardDay' });
+    const plan = await getOrCreateDayPlan(TODAY); // nothing rated yet -> not locked in
+
+    expect(plan.questionIds).toEqual([HID, QID]); // buildSlots(hardDay) = [Hard, Medium]
+  });
+
+  it('once something is rated today, a later Settings change no longer touches today\'s plan', async () => {
+    await updateSettings({ dailyMix: 'mediumDay' });
+    const plan = await getOrCreateDayPlan(TODAY);
+    expect(plan.questionIds).toEqual([QID]);
+
+    await submitRating(QID, 'good', TODAY); // today is now "started"
+
+    await updateSettings({ dailyMix: 'hardDay' });
+    const planAfter = await getOrCreateDayPlan(TODAY);
+
+    expect(planAfter.questionIds).toEqual([QID]); // unchanged — locked in, applies from tomorrow
   });
 });
