@@ -1,10 +1,12 @@
-// Screen 4 — Settings (§6.4), minus export/import (deferred to a future
-// backend/login plan) and minus building a new danger-zone reset: "Reset
-// all progress" already existed (pulled forward earlier, into the nav bar)
-// and is just relocated here, unchanged, so it isn't duplicated.
+// Screen 4 — Settings (§6.4), minus export/import of the user's own
+// progress data (deferred to a future backend/login plan — different thing
+// from the CSV catalog import below). "Reset all progress" is relocated
+// here unchanged from its earlier nav-bar placement, not rebuilt.
 
+import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, resetAllProgress, updateSettings } from '../db';
+import { ImportModal } from '../admin/ImportModal';
 import type { DailyMix } from '../types';
 
 const MIX_OPTIONS: { value: DailyMix; label: string; description: string }[] = [
@@ -15,6 +17,7 @@ const MIX_OPTIONS: { value: DailyMix; label: string; description: string }[] = [
 
 export function SettingsScreen() {
   const settings = useLiveQuery(() => db.settings.get(1));
+  const [showImportModal, setShowImportModal] = useState(false);
 
   async function handleResetProgress() {
     const ok = window.confirm(
@@ -92,6 +95,31 @@ export function SettingsScreen() {
         </div>
       </section>
 
+      {/* Deliberately styled distinctly from the two preference sections
+          above (and from the red Danger Zone below) — this is catalog/admin
+          territory, not a personal setting, and reads that way. FUTURE
+          ADMIN GATE: once a login/role system exists, wrap this whole
+          section (or just the button) in an isAdmin check — e.g.
+          `{isAdmin && <section>...}`. No such check exists yet; there's no
+          user model to check against. src/admin/ImportModal.tsx is kept as
+          its own component tree specifically so that wrapping is a one-line
+          change here, not a refactor of Settings. */}
+      <section className="mb-6 rounded-lg border border-slate-300 bg-slate-50 p-4 dark:border-slate-600 dark:bg-slate-800/60">
+        <h2 className="mb-1 text-sm font-semibold text-slate-700 dark:text-slate-200">
+          Catalog data <span className="font-normal text-slate-400 dark:text-slate-500">— admin</span>
+        </h2>
+        <p className="mb-3 text-xs text-slate-500 dark:text-slate-400">
+          Bulk-add or update questions from a CSV file. Never touches anyone's Done/SRS/review progress — only
+          title/url/difficulty/step/lecture/patterns.
+        </p>
+        <button
+          onClick={() => setShowImportModal(true)}
+          className="rounded-md border border-slate-400 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-500 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+        >
+          Import Questions
+        </button>
+      </section>
+
       <section className="rounded-lg border border-rose-200 bg-rose-50/50 p-4 dark:border-rose-900/50 dark:bg-rose-900/10">
         <h2 className="mb-1 text-sm font-semibold text-rose-700 dark:text-rose-300">Danger zone</h2>
         <p className="mb-3 text-xs text-rose-600/80 dark:text-rose-400/80">
@@ -105,6 +133,8 @@ export function SettingsScreen() {
           Reset all progress
         </button>
       </section>
+
+      {showImportModal && <ImportModal onClose={() => setShowImportModal(false)} />}
     </div>
   );
 }

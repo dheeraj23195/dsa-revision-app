@@ -2,10 +2,9 @@ import { useEffect, useState } from 'react';
 import { BankScreen } from './screens/BankScreen';
 import { TodayScreen } from './screens/TodayScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
-import { ImportScreen } from './admin/ImportScreen';
 import { applyTheme, getInitialTheme, type Theme } from './lib/theme';
 
-type Screen = 'today' | 'bank' | 'settings' | 'import';
+type Screen = 'today' | 'bank' | 'settings';
 
 function App() {
   const [screen, setScreen] = useState<Screen>('today');
@@ -23,14 +22,6 @@ function App() {
             <NavTab label="Today" active={screen === 'today'} onClick={() => setScreen('today')} />
             <NavTab label="Bank" active={screen === 'bank'} onClick={() => setScreen('bank')} />
             <NavTab label="Settings" active={screen === 'settings'} onClick={() => setScreen('settings')} />
-            {/* FUTURE ADMIN GATE: once a login/role system exists, wrap just
-                this tab (and the `screen === 'import'` render branch below)
-                in an isAdmin check — e.g. `{isAdmin && <NavTab .../>}`. No
-                such check exists yet; there's no user model to check
-                against. src/admin/ImportScreen.tsx is kept as its own
-                component tree specifically so that wrapping is a one-line
-                change here, not a refactor of Bank/Today. */}
-            <NavTab label="Import" active={screen === 'import'} onClick={() => setScreen('import')} />
           </div>
           <button
             onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
@@ -43,7 +34,6 @@ function App() {
       {screen === 'today' && <TodayScreen />}
       {screen === 'bank' && <BankScreen />}
       {screen === 'settings' && <SettingsScreen />}
-      {screen === 'import' && <ImportScreen />}
     </div>
   );
 }
