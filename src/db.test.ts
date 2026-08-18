@@ -156,3 +156,78 @@ describe('getOrCreateDayPlan: a Settings change applies immediately if today has
     expect(planAfter.questionIds).toEqual([QID]); // unchanged — locked in, applies from tomorrow
   });
 });
+
+describe('Deliberate decision: ticking "Attempted" does not protect a card from a same-day recompute', () => {
+  // "Attempted" — the checkbox that reveals a Today card's rating buttons —
+  // is pure client-side React state in TodayScreen; it writes nothing to
+  // Dexie. So to getOrCreateDayPlan, a card the user has ticked Attempted on
+  // is indistinguishable from one they haven't opened at all: only an actual
+  // ReviewLog (a rating) locks today's plan in. This is a deliberate
+  // decision (see conversation), not an oversight — widening the lock to
+  // cover "checked but unrated" would reopen the same old-mix-vs-new-mix
+  // slot reconciliation complexity already rejected for the Settings-change
+  // case above. This test locks that decision in with a real scenario,
+  // using the scheduler's own "ties -> older doneAt wins" coverage rule as
+  // the trigger, rather than just asserting the behavior.
+  const M2 = 'test-medium-q-2';
+  const HARD_FILLER = 'test-hard-filler';
+
+  it('a card still showing rating buttons (never rated) disappears once a same-day recompute picks a different question for its slot', async () => {
+    await updateSettings({ dailyMix: 'hardDay' }); // exactly 2 slots: [Hard, Medium] -- one Medium slot only
+    await db.questions.add({
+      id: HARD_FILLER,
+      title: 'Hard Filler',
+      url: '',
+      difficulty: 'Hard',
+      step: 3,
+      stepTitle: 'Step 3: Arrays',
+      patterns: ['Filler'],
+      done: false,
+      srs: null,
+      status: 'todo',
+    });
+    await markQuestionDone(HARD_FILLER);
+    await db.questions.update(HARD_FILLER, { srs: { ladderIndex: 0, dueDate: '2027-01-01', lapses: 0, reps: 0 } });
+
+    await markQuestionDone(QID); // the only Medium candidate so far
+    await db.questions.update(QID, {
+      srs: { ladderIndex: 0, dueDate: '2027-01-01', lapses: 0, reps: 0 },
+      doneAt: '2026-06-01',
+    });
+
+    const plan = await getOrCreateDayPlan(TODAY);
+    expect(plan.questionIds).toContain(QID); // QID fills the one Medium slot
+
+    // <-- Here, in the real app, the user ticks "Attempted" on QID's card,
+    // revealing its rating buttons. Nothing happens at the DB layer: there
+    // is no call to make, which is exactly the point being tested.
+
+    // A second Medium question, done with an OLDER doneAt. Ties -> older
+    // doneAt wins (§5 Step 2.3) means THIS one now wins the single Medium
+    // slot instead of QID.
+    await db.questions.add({
+      id: M2,
+      title: 'Older Medium Competitor',
+      url: '',
+      difficulty: 'Medium',
+      step: 1,
+      stepTitle: 'Step 1: Basics',
+      patterns: ['Test Pattern'],
+      done: false,
+      srs: null,
+      status: 'todo',
+    });
+    await markQuestionDone(M2);
+    await db.questions.update(M2, {
+      srs: { ladderIndex: 0, dueDate: '2027-01-01', lapses: 0, reps: 0 },
+      doneAt: '2026-01-01',
+    });
+
+    // QID was never rated -- ticking Attempted left no ReviewLog -- so the
+    // plan is still "not started" and recomputes freely.
+    const recomputed = await getOrCreateDayPlan(TODAY);
+
+    expect(recomputed.questionIds).toContain(M2);
+    expect(recomputed.questionIds).not.toContain(QID); // gone: attempted, never rated, never protected
+  });
+});
