@@ -6,7 +6,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import Fuse from 'fuse.js';
 import {
   db,
   markQuestionDone,
@@ -18,6 +17,7 @@ import type { Difficulty, Question, QuestionStatus } from '../types';
 import { DifficultyBadge, PatternTags, StatusChip } from '../components/Badges';
 import { dueLabel } from '../lib/date';
 import { seedQuestions } from '../data/seed';
+import { searchQuestions } from '../lib/search';
 
 const DIFFICULTIES: Difficulty[] = ['Easy', 'Medium', 'Hard'];
 const STATUSES: QuestionStatus[] = ['todo', 'learning', 'reviewing', 'mastered'];
@@ -101,32 +101,10 @@ export function BankScreen() {
     return [...byStep.entries()].sort((a, b) => a[0] - b[0]);
   }, [questions]);
 
-  // Fuzzy search (typo-tolerant), not exact-substring. Fields: title
-  // (weighted highest — the primary thing someone's trying to find),
-  // patterns, and stepTitle (both lower-weighted secondary ways to land on
-  // a relevant question by concept/topic rather than exact wording).
-  // threshold 0.4: empirically checked against the real ~455-row seed data
-  // rather than guessed — tight enough that a common single word like
-  // "array" doesn't return an unusably large fraction of the bank, loose
-  // enough that real one/two-letter-typo queries ("binry search", "majoirty
-  // element", "reverse linked lst") surface the right question at or near
-  // the top. ignoreLocation: true means a typo late in a long title isn't
-  // penalized just for being far from the start of the string.
-  const fuse = useMemo(() => {
-    if (!questions) return null;
-    return new Fuse(questions, {
-      keys: [
-        { name: 'title', weight: 0.7 },
-        { name: 'patterns', weight: 0.2 },
-        { name: 'stepTitle', weight: 0.1 },
-      ],
-      threshold: 0.4,
-      ignoreLocation: true,
-      minMatchCharLength: 2,
-      includeScore: true,
-    });
-  }, [questions]);
-
+  // Fuzzy search (typo-tolerant), not exact-substring — the actual Fuse.js
+  // config lives in lib/search.ts (pure, unit-tested), not inline here, so
+  // it can't silently drift without a test noticing.
+  //
   // null = search box is empty, i.e. "don't filter by search at all" —
   // distinct from an empty (but non-null) Map, which would mean "search
   // active, zero matches." Scores (lower = better) are kept, not just which
@@ -143,12 +121,11 @@ export function BankScreen() {
   // sections and the rows within them are ordered by relevance instead of
   // sheet position, specifically to avoid that failure mode.
   const searchScoreById = useMemo(() => {
-    const trimmed = search.trim();
-    if (!fuse || trimmed === '') return null;
+    if (!questions || search.trim() === '') return null;
     const map = new Map<string, number>();
-    for (const r of fuse.search(trimmed)) map.set(r.item.id, r.score ?? 1);
+    for (const r of searchQuestions(questions, search)) map.set(r.question.id, r.score);
     return map;
-  }, [fuse, search]);
+  }, [questions, search]);
 
   const filtered = useMemo(() => {
     if (!questions) return [];
