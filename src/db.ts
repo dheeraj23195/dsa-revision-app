@@ -259,3 +259,25 @@ export async function addOneMore(date: string): Promise<string | null> {
     return pick.questionId;
   });
 }
+
+// Pulled forward from Phase 2's §6.4 "danger-zone full reset" — a one-time
+// need to clear out this session's test data (clicked-through Done marks,
+// ratings, cached day plans) before a real bulk-mark pass, without losing
+// the seeded catalog data itself. Resets every question's progress fields
+// (done/doneAt/srs/status) back to fresh and wipes reviewLogs/dayPlans
+// entirely; title/url/difficulty/step/stepTitle/lecture/patterns are
+// untouched, since this resets progress, not the catalog. `settings`
+// (dailyMix/hardInterleaveEvery) is deliberately left alone — those are
+// user preferences, not test artifacts.
+export async function resetAllProgress(): Promise<void> {
+  await db.transaction('rw', db.questions, db.reviewLogs, db.dayPlans, async () => {
+    await db.questions.toCollection().modify({
+      done: false,
+      doneAt: undefined,
+      srs: null,
+      status: 'todo',
+    });
+    await db.reviewLogs.clear();
+    await db.dayPlans.clear();
+  });
+}
