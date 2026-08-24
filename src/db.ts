@@ -296,7 +296,7 @@ export async function addOneMore(date: string): Promise<string | null> {
 
     const [questions, reviewLogs] = await Promise.all([db.questions.toArray(), db.reviewLogs.toArray()]);
     const excludeIds = new Set([...plan.questionIds, ...plan.extraIds]);
-    const pick = pickOneMore(questions, reviewLogs, excludeIds, date);
+    const pick = pickOneMore(questions, reviewLogs, excludeIds, date, plan.reasons);
     if (!pick) return null;
 
     await db.dayPlans.update(date, {

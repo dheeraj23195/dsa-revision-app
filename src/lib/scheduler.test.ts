@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { Question, ReviewLog, Settings } from '../types';
-import { pickOneMore, planDayDetailed } from './scheduler';
+import { MAX_COVERAGE_PICKS_PER_PATTERN_PER_DAY, pickOneMore, planDayDetailed } from './scheduler';
 
 function q(overrides: Partial<Question> & Pick<Question, 'id' | 'difficulty' | 'patterns'>): Question {
   return {
@@ -350,5 +350,171 @@ describe('Fixture I — weak-pattern reinforcement wins a coverage slot, then ex
     const date = '2026-05-20'; // May 07 is 13 days before -> outside the 7-day window [May 13, May 19]
     const result = planDayDetailed(questions, reviewLogs, settings(), date);
     expect(result.picks[0]).toEqual({ questionId: 'q-not-weak-greedy', reason: 'coverage' });
+  });
+});
+
+// AMENDMENT (docs/SPEC-AMENDMENTS.md #1, part a): pickOneMore was a
+// divergent implementation of the coverage-pick step — unlike
+// planDayDetailed's slot loop (Fixture F), it never counted a pattern
+// already served today (the original plan, or an earlier "One More" pick)
+// against itself, so it could keep re-serving that pattern's other
+// questions instead of spreading to an untouched one. Same shape as
+// Fixture F, transplanted onto pickOneMore to prove the fix.
+describe('Fixture J — "One More" shares planDayDetailed\'s within-day local bump (mirrors Fixture F)', () => {
+  const date = '2026-07-01';
+
+  const questions: Question[] = [
+    q({ id: 'qA-recursion-already-planned', difficulty: 'Medium', patterns: ['Recursion'], doneAt: '2026-06-01', srs: { ladderIndex: 0, dueDate: '2026-08-01', lapses: 0, reps: 0 } }),
+    q({ id: 'qB-recursion-older', difficulty: 'Medium', patterns: ['Recursion'], doneAt: '2026-06-05', srs: { ladderIndex: 0, dueDate: '2026-08-01', lapses: 0, reps: 0 } }),
+    q({ id: 'qC-bitmanip-newer', difficulty: 'Medium', patterns: ['Bit Manipulation'], doneAt: '2026-06-10', srs: { ladderIndex: 0, dueDate: '2026-08-01', lapses: 0, reps: 0 } }),
+  ];
+
+  it('qC (untouched Bit Manipulation) beats qB (Recursion, already served today via qA) despite qB\'s older doneAt', () => {
+    const excludeIds = new Set(['qA-recursion-already-planned']); // e.g. dayPlan.questionIds
+    const pick = pickOneMore(questions, [], excludeIds, date);
+    expect(pick).toEqual({ questionId: 'qC-bitmanip-newer', reason: 'coverage' });
+  });
+
+  it('without qA in the picture at all, qB (older doneAt) wins the tie normally -- confirms the today-served bump is what changes the outcome above', () => {
+    const withoutQA = questions.filter((x) => x.id !== 'qA-recursion-already-planned');
+    const pick = pickOneMore(withoutQA, [], new Set(), date);
+    expect(pick).toEqual({ questionId: 'qB-recursion-older', reason: 'coverage' });
+  });
+});
+
+// AMENDMENT (docs/SPEC-AMENDMENTS.md #2, part b): a pattern may win the
+// coverage-pick slot (weak-pattern tie-break OR the ordinary fewest-reviews
+// tie-break — both produce reason: 'coverage') at most
+// MAX_COVERAGE_PICKS_PER_PATTERN_PER_DAY times per day. A weak pattern with
+// several questions can otherwise dominate nearly every coverage slot in a
+// session, which is exactly the real bug this amendment fixes.
+describe('Fixture K — weak-pattern dominance cap: Sliding Window wins slots 1-2, then loses slot 3 once capped', () => {
+  const date = '2026-08-01';
+
+  const questions: Question[] = [
+    q({ id: 'sw1', difficulty: 'Medium', patterns: ['Sliding Window'], doneAt: '2026-07-01', srs: { ladderIndex: 0, dueDate: '2026-09-01', lapses: 0, reps: 0 } }),
+    q({ id: 'sw2', difficulty: 'Medium', patterns: ['Sliding Window'], doneAt: '2026-07-02', srs: { ladderIndex: 0, dueDate: '2026-09-01', lapses: 0, reps: 0 } }),
+    q({ id: 'sw3', difficulty: 'Medium', patterns: ['Sliding Window'], doneAt: '2026-07-03', srs: { ladderIndex: 0, dueDate: '2026-09-01', lapses: 0, reps: 0 } }),
+    q({ id: 'tp1', difficulty: 'Medium', patterns: ['Two Pointers'], doneAt: '2026-07-04', srs: { ladderIndex: 0, dueDate: '2026-09-01', lapses: 0, reps: 0 } }),
+  ];
+  // 'again' on sw1, four days before `date` -> Sliding Window is weak as of
+  // `date` (within the 7-day window), so it wins the weak-pattern tie-break
+  // for as long as it isn't capped out.
+  const reviewLogs: ReviewLog[] = [{ id: 'log-again', questionId: 'sw1', date: '2026-07-28', rating: 'again', kind: 'review' }];
+
+  it('caps Sliding Window at exactly MAX_COVERAGE_PICKS_PER_PATTERN_PER_DAY wins, then falls through to Two Pointers', () => {
+    expect(MAX_COVERAGE_PICKS_PER_PATTERN_PER_DAY).toBe(2); // fixture is hand-traced against this value
+    const result = planDayDetailed(questions, reviewLogs, settings({ dailyMix: 'mediumDay' }), date);
+    expect(result.picks).toEqual([
+      { questionId: 'sw1', reason: 'coverage' }, // weak-pattern win #1
+      { questionId: 'sw2', reason: 'coverage' }, // weak-pattern win #2 -> cap now hit
+      { questionId: 'tp1', reason: 'coverage' }, // sw3 exists but SW is capped out -> falls through to Two Pointers
+    ]);
+  });
+});
+
+// Companion to Fixture K: proves the cap is scoped to coverage-pick ONLY.
+// An overdue question from an already-capped pattern must still be served —
+// priorities 1-2 (overdue / due-today) never consult coveragePickCounts at
+// all (see pickFromPool step 1's comment), so this is really just making
+// that scoping decision visible as a fixture.
+describe('Fixture L — the coverage-pick cap does not block an overdue pick from the same (capped) pattern', () => {
+  const date = '2026-08-01';
+
+  const questions: Question[] = [
+    // Already served today, both via reason: 'coverage' -> Sliding Window
+    // is at the cap per Fixture K's same MAX_COVERAGE_PICKS_PER_PATTERN_PER_DAY.
+    q({ id: 'sw-served-1', difficulty: 'Medium', patterns: ['Sliding Window'], doneAt: '2026-07-01', srs: { ladderIndex: 0, dueDate: '2026-09-01', lapses: 0, reps: 0 } }),
+    q({ id: 'sw-served-2', difficulty: 'Medium', patterns: ['Sliding Window'], doneAt: '2026-07-02', srs: { ladderIndex: 0, dueDate: '2026-09-01', lapses: 0, reps: 0 } }),
+    // Genuinely overdue, same (capped) pattern, not yet served today.
+    q({ id: 'sw-overdue', difficulty: 'Medium', patterns: ['Sliding Window'], doneAt: '2026-06-01', srs: { ladderIndex: 1, dueDate: '2026-07-20', lapses: 0, reps: 1 } }),
+    // Decoy: a different, non-overdue pattern that would win an ordinary
+    // coverage tie-break, to prove sw-overdue isn't winning by accident.
+    q({ id: 'other-decoy', difficulty: 'Medium', patterns: ['Two Pointers'], doneAt: '2026-07-05', srs: { ladderIndex: 0, dueDate: '2026-09-01', lapses: 0, reps: 0 } }),
+  ];
+
+  it('sw-overdue is still picked (reason: overdue) despite Sliding Window already being at the per-day cap', () => {
+    const excludeIds = new Set(['sw-served-1', 'sw-served-2']);
+    const reasonsById = { 'sw-served-1': 'coverage', 'sw-served-2': 'coverage' } as const;
+    const pick = pickOneMore(questions, [], excludeIds, date, reasonsById);
+    expect(pick).toEqual({ questionId: 'sw-overdue', reason: 'overdue' });
+  });
+});
+
+// Companion to Fixture K, covering the OTHER branch of the cap's fallback:
+// K shows a capped pattern losing a slot to a different, uncapped pattern
+// that's available. This fixture covers what happens when NO uncapped
+// pattern is available at all — every single remaining Done candidate for
+// the slot belongs to the one pattern already at the cap. Per the "never
+// serve an empty day" principle (same one the difficulty-relax chain
+// follows), the cap must be ignored for that slot rather than leaving it
+// empty — pickFromPool's `candidates = notCapped.length > 0 ? notCapped :
+// pool` fallback is exactly this.
+describe('Fixture M — the cap is ignored (not left empty) when every remaining candidate belongs to the capped pattern', () => {
+  const date = '2026-08-01';
+
+  // Sliding Window is the ONLY pattern in this fixture -- there is nothing
+  // else planDayDetailed could ever fall through to.
+  const questions: Question[] = [
+    q({ id: 'sw1', difficulty: 'Medium', patterns: ['Sliding Window'], doneAt: '2026-07-01', srs: { ladderIndex: 0, dueDate: '2026-09-01', lapses: 0, reps: 0 } }),
+    q({ id: 'sw2', difficulty: 'Medium', patterns: ['Sliding Window'], doneAt: '2026-07-02', srs: { ladderIndex: 0, dueDate: '2026-09-01', lapses: 0, reps: 0 } }),
+    q({ id: 'sw3', difficulty: 'Medium', patterns: ['Sliding Window'], doneAt: '2026-07-03', srs: { ladderIndex: 0, dueDate: '2026-09-01', lapses: 0, reps: 0 } }),
+    q({ id: 'sw4', difficulty: 'Medium', patterns: ['Sliding Window'], doneAt: '2026-07-04', srs: { ladderIndex: 0, dueDate: '2026-09-01', lapses: 0, reps: 0 } }),
+  ];
+
+  it('slot 3 is still filled (sw3, oldest doneAt of what remains) even though Sliding Window is already at the cap and no other pattern exists', () => {
+    const result = planDayDetailed(questions, [], settings({ dailyMix: 'mediumDay' }), date);
+    expect(result.picks).toEqual([
+      { questionId: 'sw1', reason: 'coverage' }, // win #1
+      { questionId: 'sw2', reason: 'coverage' }, // win #2 -> cap hit
+      { questionId: 'sw3', reason: 'coverage' }, // cap would leave 0 candidates -> ignored for this slot only
+    ]);
+    expect(result.picks).toHaveLength(3); // the key assertion: NOT left empty
+  });
+});
+
+// AMENDMENT #2, multi-pattern attribution: a question tagged with more than
+// one pattern (e.g. ["Sliding Window", "Two Pointers"]) that wins a
+// coverage-pick slot bumps the per-day cap counter for EVERY one of its
+// patterns, not just one -- the same "every pattern gets credited" shape
+// patternReviewCounts already uses for total review counts. Built this way
+// deliberately (see planDayDetailed's coveragePickCounts bump, which loops
+// over the full `patterns` array of the picked question); this fixture
+// makes that otherwise-implicit behavior explicit and regression-tested.
+describe('Fixture N — a multi-pattern question\'s coverage win counts toward the cap for every one of its patterns', () => {
+  const date = '2026-08-01';
+
+  const questions: Question[] = [
+    // Both weak (see reviewLogs below) and double-tagged -- each win bumps
+    // BOTH Sliding Window and Two Pointers by 1.
+    q({ id: 'mp1', difficulty: 'Medium', patterns: ['Sliding Window', 'Two Pointers'], doneAt: '2026-07-01', srs: { ladderIndex: 0, dueDate: '2026-09-01', lapses: 0, reps: 0 } }),
+    q({ id: 'mp2', difficulty: 'Medium', patterns: ['Sliding Window', 'Two Pointers'], doneAt: '2026-07-02', srs: { ladderIndex: 0, dueDate: '2026-09-01', lapses: 0, reps: 0 } }),
+    // Single-pattern questions for each half of mp1/mp2's tags -- both
+    // must end up excluded from slot 3, proving the cap landed on BOTH
+    // patterns after only 2 wins (not 2 wins per pattern, i.e. 4 total).
+    q({ id: 'sw-only', difficulty: 'Medium', patterns: ['Sliding Window'], doneAt: '2026-07-03', srs: { ladderIndex: 0, dueDate: '2026-09-01', lapses: 0, reps: 0 } }),
+    q({ id: 'tp-only', difficulty: 'Medium', patterns: ['Two Pointers'], doneAt: '2026-07-04', srs: { ladderIndex: 0, dueDate: '2026-09-01', lapses: 0, reps: 0 } }),
+    // An uninvolved third pattern, untouched -- the only valid candidate
+    // left once both Sliding Window and Two Pointers are capped.
+    q({ id: 'other-greedy', difficulty: 'Medium', patterns: ['Greedy'], doneAt: '2026-07-05', srs: { ladderIndex: 0, dueDate: '2026-09-01', lapses: 0, reps: 0 } }),
+  ];
+  // Both Sliding Window and Two Pointers are weak as of `date` (each has an
+  // 'again' review 4 days prior), so mp1/mp2/sw-only/tp-only all sort ahead
+  // of other-greedy in the weak-pattern tie-break for as long as they're
+  // eligible -- isolating this fixture from the ordinary fewest-reviews
+  // tie-break, which would otherwise let untouched Greedy win early since
+  // its count starts lower.
+  const reviewLogs: ReviewLog[] = [
+    { id: 'log-sw-again', questionId: 'sw-only', date: '2026-07-28', rating: 'again', kind: 'review' },
+    { id: 'log-tp-again', questionId: 'tp-only', date: '2026-07-28', rating: 'again', kind: 'review' },
+  ];
+
+  it('mp1 and mp2 win slots 1-2, capping BOTH patterns; slot 3 skips sw-only AND tp-only, landing on the uninvolved pattern', () => {
+    const result = planDayDetailed(questions, reviewLogs, settings({ dailyMix: 'mediumDay' }), date);
+    expect(result.picks).toEqual([
+      { questionId: 'mp1', reason: 'coverage' }, // bumps Sliding Window -> 1, Two Pointers -> 1
+      { questionId: 'mp2', reason: 'coverage' }, // bumps Sliding Window -> 2, Two Pointers -> 2 -> BOTH capped
+      { questionId: 'other-greedy', reason: 'coverage' }, // sw-only and tp-only both excluded -> falls through
+    ]);
   });
 });

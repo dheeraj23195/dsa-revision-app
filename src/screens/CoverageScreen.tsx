@@ -3,11 +3,14 @@
 // All computation lives in lib/coverage.ts (pure, unit-tested); this screen
 // just wires it to live Dexie data.
 
+import { useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db';
 import { computeCoverageSummary, computePatternCoverage, groupPatternCoverageByTopic } from '../lib/coverage';
 import type { PatternAggregateStatus } from '../lib/coverage';
 import { todayISO } from '../lib/date';
+import type { Question } from '../types';
+import { DifficultyBadge } from '../components/Badges';
 
 // Same 4-color language as StatusChip in components/Badges.tsx (todo/
 // learning/reviewing/mastered) — 'untouched' reuses the 'todo' treatment,
@@ -30,6 +33,7 @@ const STATUS_LABELS: Record<PatternAggregateStatus, string> = {
 export function CoverageScreen() {
   const questions = useLiveQuery(() => db.questions.toArray());
   const reviewLogs = useLiveQuery(() => db.reviewLogs.toArray());
+  const [selectedPattern, setSelectedPattern] = useState<string | null>(null);
 
   if (!questions || !reviewLogs) {
     return <div className="p-8 text-slate-500 dark:text-slate-400">Loading…</div>;
@@ -78,21 +82,119 @@ export function CoverageScreen() {
             <h2 className="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-200">{group.topicTitle}</h2>
             <div className="flex flex-wrap gap-2">
               {group.patterns.map((p) => (
-                <div
+                <button
                   key={p.pattern}
-                  title={`${p.doneQuestions}/${p.totalQuestions} questions done · ${p.reviewCount} reviews`}
-                  className={`rounded-md px-3 py-2 text-xs ${STATUS_STYLES[p.status]}`}
+                  onClick={() => setSelectedPattern(p.pattern)}
+                  title={`${p.doneQuestions}/${p.totalQuestions} questions done · ${p.reviewCount} reviews — click for question list`}
+                  className={`rounded-md px-3 py-2 text-left text-xs transition-opacity hover:opacity-80 ${STATUS_STYLES[p.status]}`}
                 >
                   <div className="font-medium">{p.pattern}</div>
                   <div className="opacity-80">
                     {p.reviewCount} review{p.reviewCount === 1 ? '' : 's'} · {p.doneQuestions}/{p.totalQuestions} done
                   </div>
-                </div>
+                </button>
               ))}
             </div>
           </section>
         ))}
       </div>
+
+      {selectedPattern && (
+        <PatternQuestionsModal
+          pattern={selectedPattern}
+          questions={questions}
+          onClose={() => setSelectedPattern(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// Read-only, additive UI layer on top of lib/coverage.ts's already-computed,
+// already-tested aggregation — filters the same live `questions` array the
+// screen already has, rather than adding a new computation to coverage.ts
+// or touching its tests.
+function PatternQuestionsModal({
+  pattern,
+  questions,
+  onClose,
+}: {
+  pattern: string;
+  questions: Question[];
+  onClose: () => void;
+}) {
+  const { done, notDone } = useMemo(() => {
+    const matching = questions.filter((q) => q.patterns.includes(pattern));
+    const byTitle = (a: Question, b: Question) => a.title.localeCompare(b.title);
+    return {
+      done: matching.filter((q) => q.done).sort(byTitle),
+      notDone: matching.filter((q) => !q.done).sort(byTitle),
+    };
+  }, [questions, pattern]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg bg-white p-6 shadow-xl dark:bg-slate-900">
+        <div className="mb-4 flex items-start justify-between gap-4">
+          <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100">{pattern}</h2>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="shrink-0 rounded-md px-2 py-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-500 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+          >
+            ✕
+          </button>
+        </div>
+
+        <PatternQuestionGroup title="Done" questions={done} emptyLabel="No questions done yet for this pattern." />
+        <PatternQuestionGroup title="Not done" questions={notDone} emptyLabel="Nothing left — every question is done." />
+      </div>
+    </div>
+  );
+}
+
+function PatternQuestionGroup({
+  title,
+  questions,
+  emptyLabel,
+}: {
+  title: string;
+  questions: Question[];
+  emptyLabel: string;
+}) {
+  return (
+    <div className="mb-4 last:mb-0">
+      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
+        {title} ({questions.length})
+      </h3>
+      {questions.length === 0 ? (
+        <p className="text-xs text-slate-400 dark:text-slate-500">{emptyLabel}</p>
+      ) : (
+        <ul className="space-y-1.5">
+          {questions.map((q) => (
+            <li key={q.id} className="flex items-center justify-between gap-3 text-sm">
+              {q.url ? (
+                <a
+                  href={q.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="min-w-0 truncate text-slate-700 hover:text-indigo-600 hover:underline dark:text-slate-200 dark:hover:text-indigo-400"
+                >
+                  {q.title}
+                </a>
+              ) : (
+                <span className="min-w-0 truncate text-slate-700 dark:text-slate-200">{q.title}</span>
+              )}
+              <DifficultyBadge difficulty={q.difficulty} />
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

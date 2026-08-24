@@ -131,6 +131,49 @@ function isWeak(q: Question, weakSet: Set<string>): boolean {
   return q.patterns.some((p) => weakSet.has(p));
 }
 
+// AMENDMENT (see docs/SPEC-AMENDMENTS.md #2, not in the original §5): a
+// pattern that keeps winning the coverage-pick tie-break (weak-pattern OR
+// ordinary fewest-reviews — both funnel through pickFromPool's step 3 below
+// and produce reason: 'coverage') can dominate nearly every coverage slot in
+// a day when it has few total questions — weak-pattern reinforcement alone
+// has no such limit. Cap how many times a single pattern may WIN that slot
+// per day; once hit, exclude it from coverage-pick candidacy for the rest of
+// the day and fall through to the next-best candidate. Named constant so
+// it's easy to tune later without a Settings UI control.
+export const MAX_COVERAGE_PICKS_PER_PATTERN_PER_DAY = 2;
+
+// A question is "capped out" of coverage-pick candidacy once every pattern
+// it carries has hit the per-day cap — mirrors leastCoveredScore's own
+// per-question, min-across-patterns shape. Patternless questions (score 0,
+// "always eligible" per leastCoveredScore's own comment) are never capped:
+// `.every()` on an empty array is vacuously true, so that case is called out
+// explicitly rather than left as an accidental side effect.
+function isCappedOut(q: Question, coveragePickCounts: Map<string, number>): boolean {
+  if (q.patterns.length === 0) return false;
+  return q.patterns.every((p) => (coveragePickCounts.get(p) ?? 0) >= MAX_COVERAGE_PICKS_PER_PATTERN_PER_DAY);
+}
+
+// Rebuilds today's coverage-pick win counts from a DayPlan's persisted
+// `reasons` map, so pickOneMore (a separate call per "One More" press, with
+// no loop state of its own to carry the count across presses) can enforce
+// the same per-day cap planDayDetailed enforces within its own loop. Only
+// 'coverage' entries count — overdue/due-today/hard-interleave picks never
+// occupy a coverage-pick slot, so they must never contribute to the cap.
+function coveragePickCountsFromReasons(
+  questions: Question[],
+  reasonsById: Record<string, PickReason>,
+): Map<string, number> {
+  const questionsById = new Map(questions.map((q) => [q.id, q]));
+  const counts = new Map<string, number>();
+  for (const [id, reason] of Object.entries(reasonsById)) {
+    if (reason !== 'coverage') continue;
+    for (const p of questionsById.get(id)?.patterns ?? []) {
+      counts.set(p, (counts.get(p) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
 // A question's coverage "score" is the least-reviewed of its own patterns —
 // its most under-covered angle. Patternless questions score 0 (always
 // eligible; never blocked from breadth picks for lack of tags).
@@ -166,11 +209,16 @@ function pickFromPool(
   weakSet: Set<string>,
   date: string,
   allowMastered: boolean,
+  coveragePickCounts: Map<string, number>,
 ): PlannedPick | null {
   const pool = allowMastered ? basePool : basePool.filter((q) => q.status !== 'mastered');
   if (pool.length === 0) return null;
 
-  // 1. Overdue reviews, oldest due date first.
+  // 1. Overdue reviews, oldest due date first. Priorities 1-2 are
+  // deliberately evaluated against the FULL pool, before the per-day
+  // coverage cap below ever comes into play — a genuinely overdue question
+  // is served regardless of how many times its pattern has already won a
+  // coverage-pick slot today (docs/SPEC-AMENDMENTS.md #2).
   const overdue = pool
     .filter((q) => q.srs!.dueDate < date)
     .sort((a, b) => a.srs!.dueDate.localeCompare(b.srs!.dueDate) || byDoneAtAsc(a, b));
@@ -182,8 +230,14 @@ function pickFromPool(
 
   // 3. Coverage pick. AMENDMENT (docs/SPEC-AMENDMENTS.md #1): weak patterns
   // sort first, then fewest total reviews (as originally specced), then
-  // older doneAt as the final tie-break.
-  const ranked = pool.slice().sort((a, b) => {
+  // older doneAt as the final tie-break. AMENDMENT #2: a pattern that has
+  // already won MAX_COVERAGE_PICKS_PER_PATTERN_PER_DAY coverage-pick slots
+  // today is excluded from candidacy here — unless that would leave nothing
+  // to pick, in which case the cap is ignored for this slot only (same
+  // "never serve an empty day" principle as the difficulty-relax chain).
+  const notCapped = pool.filter((q) => !isCappedOut(q, coveragePickCounts));
+  const candidates = notCapped.length > 0 ? notCapped : pool;
+  const ranked = candidates.slice().sort((a, b) => {
     const weakDiff = Number(isWeak(b, weakSet)) - Number(isWeak(a, weakSet));
     if (weakDiff !== 0) return weakDiff;
     return leastCoveredScore(a, counts) - leastCoveredScore(b, counts) || byDoneAtAsc(a, b);
@@ -198,6 +252,7 @@ function pickForSlot(
   weakSet: Set<string>,
   date: string,
   usedIds: Set<string>,
+  coveragePickCounts: Map<string, number>,
 ): PlannedPick | null {
   for (const difficulty of DIFFICULTY_RELAX_CHAIN[slot.difficulty]) {
     const basePool = questions.filter(
@@ -224,7 +279,7 @@ function pickForSlot(
       // normal (non-mastered) pick rather than picking arbitrarily.
     }
 
-    const pick = pickFromPool(basePool, counts, weakSet, date, false);
+    const pick = pickFromPool(basePool, counts, weakSet, date, false, coveragePickCounts);
     if (pick) return pick;
     // pickFromPool returned null: basePool had candidates, but all of them
     // were mastered — relax to the next difficulty rather than serving a
@@ -239,20 +294,45 @@ function pickForSlot(
  * above) — "remain eligible for One More" is explicit. `excludeIds` must
  * include both the day's original questionIds AND any extraIds already
  * appended by earlier "One More" presses, so a still-unrated extra pick
- * can never be served a second time before it's rated. */
+ * can never be served a second time before it's rated.
+ *
+ * `reasonsById` should be the day's DayPlan.reasons (defaults to {} only
+ * for callers that genuinely have no plan yet). Two things depend on it:
+ *  - AMENDMENT (docs/SPEC-AMENDMENTS.md #1): mirrors planDayDetailed's own
+ *    within-day local bump (Fixture F) — every pattern already served
+ *    today (original plan picks AND earlier One More extras, i.e. every id
+ *    in excludeIds) counts against itself for THIS pick's coverage ranking
+ *    too, not just reviewLogs from past days. Without this, pickOneMore was
+ *    a divergent implementation of the coverage step that ignored today's
+ *    own picks entirely, unlike planDayDetailed's slot loop.
+ *  - AMENDMENT #2: reconstructs today's per-pattern coverage-pick win
+ *    counts (see coveragePickCountsFromReasons) so the same per-day cap
+ *    planDayDetailed enforces across its slots also holds across separate
+ *    "One More" presses, which each get their own pickOneMore call with no
+ *    shared loop state. */
 export function pickOneMore(
   questions: Question[],
   reviewLogs: ReviewLog[],
   excludeIds: Set<string>,
   date: string,
+  reasonsById: Record<string, PickReason> = {},
 ): PlannedPick | null {
   const counts = patternReviewCounts(questions, reviewLogs);
   const weakSet = weakPatterns(questions, reviewLogs, date);
+  const coveragePickCounts = coveragePickCountsFromReasons(questions, reasonsById);
+
+  const questionsById = new Map(questions.map((q) => [q.id, q]));
+  for (const id of excludeIds) {
+    for (const p of questionsById.get(id)?.patterns ?? []) {
+      counts.set(p, (counts.get(p) ?? 0) + 1);
+    }
+  }
+
   for (const difficulty of ['Medium', 'Hard', 'Easy'] as const) {
     const basePool = questions.filter(
       (q) => q.done && q.srs !== null && q.difficulty === difficulty && !excludeIds.has(q.id),
     );
-    const pick = pickFromPool(basePool, counts, weakSet, date, true);
+    const pick = pickFromPool(basePool, counts, weakSet, date, true, coveragePickCounts);
     if (pick) return pick;
   }
   return null;
@@ -289,10 +369,11 @@ export function planDayDetailed(
   const weakSet = weakPatterns(questions, reviewLogs, date);
   const questionsById = new Map(questions.map((q) => [q.id, q]));
   const usedIds = new Set<string>();
+  const coveragePickCounts = new Map<string, number>();
   const picks: PlannedPick[] = [];
 
   for (const slot of buildSlots(mix, interleaveDay)) {
-    const pick = pickForSlot(slot, questions, counts, weakSet, date, usedIds);
+    const pick = pickForSlot(slot, questions, counts, weakSet, date, usedIds, coveragePickCounts);
     if (pick) {
       picks.push(pick);
       usedIds.add(pick.questionId);
@@ -305,6 +386,14 @@ export function planDayDetailed(
       // possible" breadth goal within a single day, not just across days.
       for (const p of questionsById.get(pick.questionId)?.patterns ?? []) {
         counts.set(p, (counts.get(p) ?? 0) + 1);
+      }
+      // AMENDMENT (docs/SPEC-AMENDMENTS.md #2): only a 'coverage'-reason
+      // pick counts toward the per-day cap — overdue/due-today/hard-
+      // interleave picks never occupy a coverage-pick slot.
+      if (pick.reason === 'coverage') {
+        for (const p of questionsById.get(pick.questionId)?.patterns ?? []) {
+          coveragePickCounts.set(p, (coveragePickCounts.get(p) ?? 0) + 1);
+        }
       }
     }
     // If pick is null, every difficulty in the relax chain was exhausted
